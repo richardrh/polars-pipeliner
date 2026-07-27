@@ -1,0 +1,154 @@
+name: Release
+
+on:
+  release:
+    types:
+      - published
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.event.release.tag_name }}
+  cancel-in-progress: false
+
+env:
+  UV_VERSION: "0.11.32"
+  PYTHON_VERSION: "3.13"
+
+jobs:
+  build-and-validate:
+    name: Build and validate release distributions
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout release tag
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.event.release.tag_name }}
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: ${{ env.UV_VERSION }}
+          python-version: ${{ env.PYTHON_VERSION }}
+          enable-cache: true
+          cache-suffix: py313-release
+          prune-cache: true
+
+      - name: Install Python ${{ env.PYTHON_VERSION }}
+        run: uv python install "${PYTHON_VERSION}"
+
+      - name: Verify release tag matches project version
+        run: |
+          PROJECT_VERSION="$(python - <<'PY'
+          import tomllib
+          from pathlib import Path
+
+          with Path('pyproject.toml').open('rb') as pyproject:
+              print(tomllib.load(pyproject)['project']['version'])
+          PY
+          )"
+          EXPECTED_TAG="v${PROJECT_VERSION}"
+          if [ "${GITHUB_REF_NAME}" != "${EXPECTED_TAG}" ]; then
+            printf 'Release tag %s does not match pyproject version %s (expected %s)\n' \
+              "${GITHUB_REF_NAME}" "${PROJECT_VERSION}" "${EXPECTED_TAG}" >&2
+            exit 1
+          fi
+
+      - name: Check lockfile is current
+        run: uv lock --check
+
+      - name: Sync locked environment
+        run: uv sync --frozen --all-groups --python "${PYTHON_VERSION}"
+
+      - name: Run tests
+        run: uv run --frozen pytest
+
+      - name: Run mypy strict
+        run: uv run --frozen mypy
+
+      - name: Run ty
+        run: uv run --frozen ty check
+
+      - name: Run Ruff lint
+        run: uv run --frozen ruff check
+
+      - name: Run Ruff format check
+        run: uv run --frozen ruff format --check
+
+      - name: Build source and wheel distributions
+        run: |
+          rm -rf dist
+          uv build --no-sources
+
+      - name: Validate package metadata
+        run: uv run --frozen --with twine python -m twine check --strict dist/*
+
+      - name: Smoke test installed wheel with basic example
+        env:
+          EXAMPLE_RUN: ${{ github.workspace }}/examples/basic/run.py
+        run: |
+          WHEEL_PATH="$(python - <<'PY'
+          from pathlib import Path
+
+          wheels = sorted(Path('dist').glob('polars_pipeliner-*.whl'))
+          if len(wheels) != 1:
+              raise SystemExit(f'expected exactly one polars-pipeliner wheel, found {len(wheels)}: {wheels}')
+          print(wheels[0].resolve())
+          PY
+          )"
+          cd "${RUNNER_TEMP}"
+          uv run --isolated --no-project --python "${PYTHON_VERSION}" --with "${WHEEL_PATH}" python - <<'PY'
+          import os
+          import subprocess
+          import sys
+
+          completed = subprocess.run(
+              [sys.executable, os.environ["EXAMPLE_RUN"]],
+              check=True,
+              capture_output=True,
+              text=True,
+          )
+          stdout = completed.stdout
+          stderr = completed.stderr
+          assert "Resolved order: staging.orders -> intermediate.qualified_orders -> marts.orders_by_country" in stdout
+          assert "Qualified orders:" in stdout
+          assert "Orders by country:" in stdout
+          assert "total_amount" in stdout
+          assert "10.5" in stdout
+          assert "7.25" in stdout
+          assert "Building LazyFrame plan for model staging.orders" in stderr
+          assert "Collecting target LazyFrames: marts.orders_by_country" in stderr
+          PY
+
+      - name: Upload distribution artifacts
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: python-distributions
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: Publish to PyPI
+    runs-on: ubuntu-latest
+    needs: build-and-validate
+    environment:
+      name: pypi
+      url: https://pypi.org/p/polars-pipeliner
+    permissions:
+      id-token: write
+    steps:
+      - name: Download distribution artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: python-distributions
+          path: dist
+
+      - name: Publish package distributions to PyPI
+        uses: pypa/gh-action-pypi-publish@ba38be9e461d3875417946c167d0b5f3d385a247 # v1.14.1
+        with:
+          packages-dir: dist
+          print-hash: true

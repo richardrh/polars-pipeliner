@@ -1,0 +1,149 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  UV_VERSION: "0.11.32"
+  PYTHON_VERSION: "3.13"
+
+jobs:
+  quality-package:
+    name: Quality, package, and wheel smoke (Python 3.13)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: ${{ env.UV_VERSION }}
+          python-version: ${{ env.PYTHON_VERSION }}
+          enable-cache: true
+          cache-suffix: py313-quality
+          prune-cache: true
+
+      - name: Install Python ${{ env.PYTHON_VERSION }}
+        run: uv python install "${PYTHON_VERSION}"
+
+      - name: Check lockfile is current
+        run: uv lock --check
+
+      - name: Sync locked environment
+        run: uv sync --frozen --all-groups --python "${PYTHON_VERSION}"
+
+      - name: Run tests
+        run: uv run --frozen pytest
+
+      - name: Run mypy strict
+        run: uv run --frozen mypy
+
+      - name: Run ty
+        run: uv run --frozen ty check
+
+      - name: Run Ruff lint
+        run: uv run --frozen ruff check
+
+      - name: Run Ruff format check
+        run: uv run --frozen ruff format --check
+
+      - name: Build source and wheel distributions
+        run: |
+          rm -rf dist
+          uv build --no-sources
+
+      - name: Smoke test installed wheel with basic example
+        env:
+          EXAMPLE_RUN: ${{ github.workspace }}/examples/basic/run.py
+        run: |
+          WHEEL_PATH="$(python - <<'PY'
+          from pathlib import Path
+
+          wheels = sorted(Path('dist').glob('polars_pipeliner-*.whl'))
+          if len(wheels) != 1:
+              raise SystemExit(f'expected exactly one polars-pipeliner wheel, found {len(wheels)}: {wheels}')
+          print(wheels[0].resolve())
+          PY
+          )"
+          cd "${RUNNER_TEMP}"
+          uv run --isolated --no-project --python "${PYTHON_VERSION}" --with "${WHEEL_PATH}" python - <<'PY'
+          import os
+          import subprocess
+          import sys
+
+          completed = subprocess.run(
+              [sys.executable, os.environ["EXAMPLE_RUN"]],
+              check=True,
+              capture_output=True,
+              text=True,
+          )
+          stdout = completed.stdout
+          stderr = completed.stderr
+          assert "Resolved order: staging.orders -> intermediate.qualified_orders -> marts.orders_by_country" in stdout
+          assert "Qualified orders:" in stdout
+          assert "Orders by country:" in stdout
+          assert "total_amount" in stdout
+          assert "10.5" in stdout
+          assert "7.25" in stdout
+          assert "Building LazyFrame plan for model staging.orders" in stderr
+          assert "Collecting target LazyFrames: marts.orders_by_country" in stderr
+          PY
+
+  compatibility:
+    name: Compatibility (Python ${{ matrix.python-version }}, Polars ${{ matrix.polars-label }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - python-version: "3.13"
+            polars-spec: "polars==1.20.0"
+            polars-label: "1.20.0"
+          - python-version: "3.14"
+            polars-spec: "polars>=1.20.0"
+            polars-label: "latest"
+    env:
+      VENV_PATH: .venv-compat-${{ matrix.python-version }}-${{ matrix.polars-label }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: ${{ env.UV_VERSION }}
+          python-version: ${{ matrix.python-version }}
+          enable-cache: true
+          cache-suffix: py${{ matrix.python-version }}-polars-${{ matrix.polars-label }}
+          prune-cache: true
+
+      - name: Install Python ${{ matrix.python-version }}
+        run: uv python install "${{ matrix.python-version }}"
+
+      - name: Create isolated compatibility environment
+        run: uv venv --python "${{ matrix.python-version }}" "${VENV_PATH}"
+
+      - name: Install project, tests, and matrix Polars without changing lockfile
+        run: |
+          uv pip install --python "${VENV_PATH}/bin/python" \
+            -e . \
+            "${{ matrix.polars-spec }}" \
+            "hypothesis>=6.0" \
+            "pytest>=9.1.1"
+
+      - name: Show resolved Polars version
+        run: |
+          "${VENV_PATH}/bin/python" -c "import polars; print(polars.__version__)"
+
+      - name: Run full test suite
+        run: |
+          "${VENV_PATH}/bin/python" -m pytest

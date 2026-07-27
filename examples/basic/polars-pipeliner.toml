@@ -1,0 +1,2 @@
+[polars-pipeliner]
+LOG_LEVEL = "INFO"

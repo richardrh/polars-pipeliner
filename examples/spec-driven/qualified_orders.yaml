@@ -1,0 +1,31 @@
+name: qualified_orders
+source:
+  format: csv
+  path: fixtures/orders.csv
+parameters:
+  minimum_amount: 5.0
+context: Keep qualifying orders for the country amount report.
+expected_schema:
+  - name: country
+    dtype: String
+    nullable: false
+  - name: amount
+    dtype: Float64
+    nullable: false
+transform:
+  filter:
+    column: amount
+    operator: gte
+    parameter: minimum_amount
+  select: [country, amount]
+validation:
+  unique: [country]
+  fixtures:
+    - source: fixtures/orders.csv
+      parameters:
+        minimum_amount: 5.0
+      expected_rows:
+        - country: GB
+          amount: 10.5
+        - country: US
+          amount: 7.25
