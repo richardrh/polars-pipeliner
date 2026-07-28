@@ -86,16 +86,16 @@ jobs:
       - name: Validate package metadata
         run: uv run --frozen --with twine python -m twine check --strict dist/*
 
-      - name: Smoke test installed wheel with basic example
+      - name: Smoke test installed wheel with customer-orders example
         env:
-          EXAMPLE_RUN: ${{ github.workspace }}/examples/basic/run.py
+          EXAMPLE_RUN: ${{ github.workspace }}/examples/customer-orders/run.py
         run: |
           WHEEL_PATH="$(python - <<'PY'
           from pathlib import Path
 
-          wheels = sorted(Path('dist').glob('polars_pipeliner-*.whl'))
+          wheels = sorted(Path('dist').glob('polars_build_tool-*.whl'))
           if len(wheels) != 1:
-              raise SystemExit(f'expected exactly one polars-pipeliner wheel, found {len(wheels)}: {wheels}')
+              raise SystemExit(f'expected exactly one polars-build-tool wheel, found {len(wheels)}: {wheels}')
           print(wheels[0].resolve())
           PY
           )"
@@ -104,23 +104,39 @@ jobs:
           import os
           import subprocess
           import sys
+          from pathlib import Path
 
-          completed = subprocess.run(
-              [sys.executable, os.environ["EXAMPLE_RUN"]],
-              check=True,
-              capture_output=True,
-              text=True,
-          )
-          stdout = completed.stdout
-          stderr = completed.stderr
-          assert "Resolved order: staging.orders -> intermediate.qualified_orders -> marts.orders_by_country" in stdout
-          assert "Qualified orders:" in stdout
-          assert "Orders by country:" in stdout
-          assert "total_amount" in stdout
-          assert "10.5" in stdout
-          assert "7.25" in stdout
-          assert "Building LazyFrame plan for model staging.orders" in stderr
-          assert "Collecting target LazyFrames: marts.orders_by_country" in stderr
+          import polars as pl
+
+          example_root = Path(os.environ["EXAMPLE_RUN"]).parent
+          target = example_root / "target"
+          try:
+              completed = subprocess.run(
+                  [sys.executable, os.environ["EXAMPLE_RUN"]],
+                  check=True,
+                  capture_output=True,
+                  text=True,
+              )
+              assert "Manifest:" in completed.stdout
+              result = pl.read_parquet(target / "customer_orders.parquet")
+              assert result.schema == {
+                  "customer_id": pl.Int64,
+                  "customer_name": pl.String,
+                  "segment": pl.String,
+                  "order_count": pl.UInt32,
+                  "units_ordered": pl.Int64,
+                  "total_spend": pl.Float64,
+              }
+              assert result.to_dicts() == [
+                  {"customer_id": 1, "customer_name": "Ada Lovelace", "segment": "Enterprise", "order_count": 2, "units_ordered": 3, "total_spend": 130.0},
+                  {"customer_id": 2, "customer_name": "Grace Hopper", "segment": "Small Business", "order_count": 2, "units_ordered": 4, "total_spend": 100.0},
+                  {"customer_id": 3, "customer_name": "Alan Turing", "segment": "Enterprise", "order_count": 1, "units_ordered": 2, "total_spend": 500.0},
+                  {"customer_id": 4, "customer_name": "Katherine Johnson", "segment": "Public Sector", "order_count": 0, "units_ordered": 0, "total_spend": 0.0},
+              ]
+          finally:
+              import shutil
+
+              shutil.rmtree(target, ignore_errors=True)
           PY
 
       - name: Upload distribution artifacts
@@ -137,7 +153,7 @@ jobs:
     needs: build-and-validate
     environment:
       name: pypi
-      url: https://pypi.org/p/polars-pipeliner
+      url: https://pypi.org/p/polars-build-tool
     permissions:
       id-token: write
     steps:

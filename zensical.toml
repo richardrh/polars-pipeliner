@@ -1,5 +1,5 @@
 [project]
-site_name = "polars-pipeliner"
+site_name = "polars-build-tool"
 docs_dir = "docs"
 nav = [
     { Overview = "index.md" },

@@ -1,75 +1,36 @@
 # Setup and run
 
-## Install
-
-Use Python 3.13 or later. Add the package to a uv project:
+Use Python 3.13+ and `polars-build-tool` with Polars 1.38.1+.
 
 ```bash
-uv add polars-pipeliner
+uv add polars-build-tool
 ```
 
-For this source checkout, install the project and its development tools:
-
-```bash
-uv sync --all-groups
-```
-
-## Place files
-
-Keep source data and query files in your project. A minimal layout is:
-
-```text
-my-project/
-├── data/
-│   └── orders.csv
-└── queries/
-    └── staging/
-        └── orders.py
-```
-
-## Minimal working example
-
-Create `queries/staging/orders.py`:
+Only Python files recursively under `sources/`, `staging/`, `intermediate/`,
+and `marts/` are models. Each must define exactly one local model class.
+`SourceModel` belongs in `sources`; `Model` belongs in `staging` or
+`intermediate`; and `MartModel` belongs in `marts`.
 
 ```python
-from pathlib import Path
+from polars_pipeliner import discover
 
-import polars as pl
-
-from polars_pipeliner import CsvSource, PolarsModel, QueryMetadata
-
-ORDERS = pl.Schema({"order_id": pl.Int64, "amount": pl.Float64})
-
-
-class Model(PolarsModel):
-    metadata = QueryMetadata(
-        inputs={
-            "orders": CsvSource(
-                path=Path(__file__).parents[2] / "data" / "orders.csv",
-                schema=ORDERS,
-            )
-        },
-        output_schema=ORDERS,
-    )
-
-    @classmethod
-    def transform(cls, orders: pl.LazyFrame) -> pl.LazyFrame:
-        return orders
+manifest = discover(".").run()
+print(manifest)
 ```
 
-Run a target from Python:
+`run()` validates every source and transform plan before it begins writing.
+It materializes every mart and returns its destination manifest. Local relative
+destinations are resolved from the project root.
+
+The canonical [`customer-orders`](../examples/customer-orders) example contains
+customers, products, and orders, then left-joins customer aggregates so a
+customer with no orders has zero totals. Run it from the repository root with:
 
 ```bash
-uv run python -c 'from polars_pipeliner import discover; print(discover("queries").run(["staging.orders"]))'
+uv run python examples/customer-orders/run.py
 ```
 
-Run the repository example exactly as shipped:
-
-```bash
-uv run python examples/basic/run.py
-```
-
-Build this documentation site locally:
+Build docs locally with:
 
 ```bash
 uv run zensical build --strict

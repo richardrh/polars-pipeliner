@@ -110,7 +110,7 @@ class DiscoveryError(QueryError):
     def model_count(cls, node_id: str, path: Path, count: int) -> DiscoveryError:
         return cls(
             f"Query {node_id} ({path}) must define exactly one local concrete "
-            f"PolarsModel subclass; found {count}"
+            f"model class; found {count}"
         )
 
     @classmethod
@@ -149,6 +149,20 @@ class DiscoveryError(QueryError):
     def invalid_source(cls, node_id: str, path: Path) -> DiscoveryError:
         return cls(f"Query {node_id} ({path}) has an invalid input source")
 
+    @classmethod
+    def invalid_placement(
+        cls, node_id: str, path: Path, model: str, directory: str
+    ) -> DiscoveryError:
+        return cls(
+            f"Model {node_id} ({path}) is a {model} and must be under {directory}/"
+        )
+
+    @classmethod
+    def invalid_method(cls, node_id: str, path: Path, method: str) -> DiscoveryError:
+        return cls(
+            f"Model {node_id} ({path}) must define ordinary instance method {method}"
+        )
+
 
 class QueryValidationError(QueryError):
     """The set of discovered models is not a valid DAG."""
@@ -156,10 +170,6 @@ class QueryValidationError(QueryError):
     @classmethod
     def duplicate_node_id(cls, node_id: str, path: Path) -> QueryValidationError:
         return cls(f"Duplicate node ID {node_id!r}: {path}")
-
-    @classmethod
-    def unknown_targets(cls, targets: Iterable[str]) -> QueryValidationError:
-        return cls(f"Unknown target(s): {', '.join(targets)}")
 
     @classmethod
     def missing_dependencies(
@@ -177,10 +187,6 @@ class QueryValidationError(QueryError):
         return cls(f"Cycle detected: {' -> '.join(nodes)}")
 
     @classmethod
-    def source_contract_conflict(cls, location: str) -> QueryValidationError:
-        return cls(f"Conflicting declarations for physical source {location}")
-
-    @classmethod
     def query_source_schema_mismatch(
         cls,
         node_id: str,
@@ -194,22 +200,6 @@ class QueryValidationError(QueryError):
             f"Query {node_id} ({path}) input {argument!r} expects schema {expected} "
             f"from {producer!r}, but its declared output schema is {actual}"
         )
-
-    @classmethod
-    def targets_must_be_sequence(cls) -> QueryValidationError:
-        return cls("Targets must be a sequence of node IDs, not a string")
-
-    @classmethod
-    def empty_targets(cls) -> QueryValidationError:
-        return cls("At least one explicit target is required")
-
-    @classmethod
-    def invalid_targets(cls) -> QueryValidationError:
-        return cls("Targets must be non-empty node ID strings")
-
-    @classmethod
-    def duplicate_targets(cls) -> QueryValidationError:
-        return cls("Targets must not contain duplicates")
 
 
 class QueryBuildError(QueryError):
@@ -230,14 +220,26 @@ class QueryBuildError(QueryError):
 
 
 class QueryExecutionError(QueryError):
-    """Selected target LazyFrames failed during physical collection."""
+    """A mart output failed during executor-owned materialization."""
 
     @classmethod
-    def collection_failed(
-        cls, targets: Iterable[str], detail: Exception
+    def output_failed(
+        cls, node_id: str, destination: str, detail: Exception
     ) -> QueryExecutionError:
         return cls(
-            f"Failed to collect target(s) {', '.join(targets)}: "
+            f"Failed to materialize {node_id} to {_redact_uris(destination)}: {_redact_uris(str(detail))}"
+        )
+
+    @classmethod
+    def grouped_outputs_failed(
+        cls, outputs: Iterable[tuple[str, str]], detail: Exception
+    ) -> QueryExecutionError:
+        destinations = ", ".join(
+            f"{node_id} to {_redact_uris(destination)}"
+            for node_id, destination in outputs
+        )
+        return cls(
+            f"Failed to materialize grouped outputs ({destinations}): "
             f"{_redact_uris(str(detail))}"
         )
 
@@ -256,18 +258,16 @@ class ModelValidationError(ValueError):
 
     @classmethod
     def schema_mismatch(
-        cls, model: type[object], expected: object, actual: object
+        cls, model: object, expected: object, actual: object
     ) -> ModelValidationError:
         return cls(
-            f"{model.__module__}.{model.__qualname__}: output schema mismatch; "
+            f"{type(model).__module__}.{type(model).__qualname__}: output schema mismatch; "
             f"expected {expected}, got {actual}"
         )
 
     @classmethod
-    def non_lazy_frame(
-        cls, model: type[object], actual: object
-    ) -> ModelValidationError:
+    def non_lazy_frame(cls, model: object, actual: object) -> ModelValidationError:
         return cls(
-            f"{model.__module__}.{model.__qualname__}: transform returned "
+            f"{type(model).__module__}.{type(model).__qualname__}: model method returned "
             f"{type(actual).__name__}, not polars.LazyFrame"
         )
