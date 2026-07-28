@@ -10,7 +10,7 @@ from typing import Final, TextIO, cast
 
 from .errors import ConfigError
 
-CONFIG_TABLE: Final = "polars-pipeliner"
+CONFIG_TABLE: Final = "polars-build-tool"
 DEFAULT_LOG_LEVEL: Final = "WARNING"
 VALID_LOG_LEVELS: Final = frozenset({"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"})
 

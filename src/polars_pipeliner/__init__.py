@@ -10,34 +10,25 @@ from .errors import (
     QueryExecutionError,
     QueryValidationError,
 )
-from .executor import BuildResult
-from .model import PolarsModel
+from .model import Input, MartModel, Model, SourceModel
+from .output import Output
 from .project import Project, discover
-from .sources import (
-    CsvSource,
-    ParquetSource,
-    QueryMetadata,
-    QuerySource,
-    Source,
-)
 
 __all__ = [
-    "BuildResult",
     "ConfigError",
     "DiscoveryError",
     "ModelValidationError",
-    "PolarsModel",
-    "CsvSource",
-    "ParquetSource",
+    "Input",
+    "MartModel",
+    "Model",
+    "Output",
     "Project",
     "ProjectConfig",
-    "QueryMetadata",
-    "QuerySource",
     "QueryBuildError",
     "QueryError",
     "QueryExecutionError",
     "QueryValidationError",
-    "Source",
+    "SourceModel",
     "discover",
     "load_config",
 ]

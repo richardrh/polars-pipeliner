@@ -10,37 +10,28 @@ from polars_pipeliner import discover
 
 
 @given(st.integers(min_value=1, max_value=6))
-def test_generated_query_source_chain_resolves_in_dependency_order(count: int) -> None:
+def test_generated_model_chain_resolves_in_dependency_order(count: int) -> None:
     with TemporaryDirectory() as directory:
         root = Path(directory)
-        for index in range(count):
-            inputs = (
-                "{}"
-                if index == 0
-                else (
-                    "{'upstream': QuerySource("
-                    f"node_id='node_{index - 1}', schema=SCHEMA)}}"
-                )
-            )
-            parameters = "" if index == 0 else "upstream"
-            body = (
-                "return pl.LazyFrame({'value': [1]})"
-                if index == 0
-                else "return upstream"
-            )
-            root.joinpath(f"node_{index}.py").write_text(
-                f"""import polars as pl
-from polars_pipeliner import PolarsModel, QueryMetadata, QuerySource
-SCHEMA = pl.Schema({{'value': pl.Int64}})
-class Model(PolarsModel):
-    metadata = QueryMetadata(inputs={inputs}, output_schema=SCHEMA)
-    @classmethod
-    def transform(cls, {parameters}) -> pl.LazyFrame:
-        {body}
-"""
-            )
+        root.joinpath("sources").mkdir()
+        root.joinpath("sources/node_0.py").write_text("""import polars as pl
+from polars_pipeliner import SourceModel
+class Node(SourceModel):
+    output_schema = pl.Schema({'value': pl.Int64})
+    def source(self) -> pl.LazyFrame:
+        return pl.LazyFrame({'value': [1]})
+""")
+        for index in range(1, count):
+            root.joinpath("staging").mkdir(exist_ok=True)
+            root.joinpath(f"staging/node_{index}.py").write_text(f"""import polars as pl
+from polars_pipeliner import Input, Model
+class Node(Model):
+    inputs = {{'upstream': Input('{("sources.node_0" if index == 1 else f"staging.node_{index - 1}")}', schema=pl.Schema({{'value': pl.Int64}}))}}
+    output_schema = pl.Schema({{'value': pl.Int64}})
+    def transform(self, upstream: pl.LazyFrame) -> pl.LazyFrame:
+        return upstream
+""")
         project = discover(root)
-
-    assert project.resolve([f"node_{count - 1}"]) == tuple(
-        f"node_{index}" for index in range(count)
+    assert project.resolve() == ("sources.node_0",) + tuple(
+        f"staging.node_{index}" for index in range(1, count)
     )

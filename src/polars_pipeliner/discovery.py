@@ -1,4 +1,4 @@
-"""Recursive model-file discovery, importing, and contract validation."""
+"""Scoped model discovery and static contract validation."""
 
 from __future__ import annotations
 
@@ -9,124 +9,138 @@ import sys
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from types import ModuleType
 
 import polars as pl
 
-from .errors import DiscoveryError, QueryValidationError
-from .model import PolarsModel
-from .sources import QueryMetadata, QuerySource, Source
+from .errors import DiscoveryError
+from .model import Input, MartModel, Model, SourceModel
+from .output import OutputSpec
+
+MODEL_DIRECTORIES = ("sources", "staging", "intermediate", "marts")
 
 
 @dataclass(frozen=True)
 class ModelNode:
-    """A validated model and its stable path-derived node identity."""
-
     node_id: str
     path: Path
-    model: type[PolarsModel[...]]
+    model: type[SourceModel | Model]
 
 
-def discover_models(query_root: str | Path) -> Mapping[str, ModelNode]:
-    """Discover public model files in deterministic relative-path order."""
-    root = Path(query_root).resolve()
+def discover_models(project_root: str | Path) -> Mapping[str, ModelNode]:
+    """Import exactly one local model class from every scoped model file."""
+    root = Path(project_root).resolve()
     if not root.is_dir():
         raise DiscoveryError.invalid_root(root)
-
     nodes: dict[str, ModelNode] = {}
-    for path in sorted(root.rglob("*.py")):
-        relative = path.relative_to(root)
-        if path.name == "__init__.py" or any(
-            component.startswith("_") for component in relative.parts
-        ):
-            continue
-        node_id = ".".join(relative.with_suffix("").parts)
-        if node_id in nodes:
-            raise QueryValidationError.duplicate_node_id(node_id, path)
-        model = load_model(path, root, node_id)
-        validate_model(model, path, node_id)
-        nodes[node_id] = ModelNode(node_id=node_id, path=path, model=model)
+    paths = sorted(
+        path
+        for directory in MODEL_DIRECTORIES
+        if (root / directory).is_dir()
+        for path in (root / directory).rglob("*.py")
+        if path.name != "__init__.py"
+        and not any(
+            part.startswith("_") or part == "__pycache__"
+            for part in path.relative_to(root).parts
+        )
+    )
+    for path in paths:
+        node_id = ".".join(path.relative_to(root).with_suffix("").parts)
+        model_type = load_model(path, root, node_id)
+        validate_model(model_type, path, node_id)
+        nodes[node_id] = ModelNode(node_id, path, model_type)
     return nodes
 
 
-def load_model(path: Path, root: Path, node_id: str) -> type[PolarsModel[...]]:
-    """Import one model module and return its sole local concrete model class."""
+def load_model(path: Path, root: Path, node_id: str) -> type[SourceModel | Model]:
     module_name = (
         "_polars_pipeliner_model_"
         + hashlib.sha256(f"{root}:{node_id}".encode()).hexdigest()
     )
-    module_spec = importlib.util.spec_from_file_location(module_name, path)
-    if module_spec is None or module_spec.loader is None:
+    spec = importlib.util.spec_from_file_location(module_name, path)
+    if spec is None or spec.loader is None:
         raise DiscoveryError.import_spec(path)
-    module = importlib.util.module_from_spec(module_spec)
+    module = importlib.util.module_from_spec(spec)
     sys.modules[module_name] = module
     try:
-        module_spec.loader.exec_module(module)
+        spec.loader.exec_module(module)
     except Exception as error:
         sys.modules.pop(module_name, None)
         raise DiscoveryError.import_failed(node_id, path, error) from error
-    return local_concrete_model(module, path, node_id)
-
-
-def local_concrete_model(
-    module: ModuleType, path: Path, node_id: str
-) -> type[PolarsModel[...]]:
-    """Find exactly one non-abstract PolarsModel declared by this module."""
     models = [
-        candidate
-        for candidate in module.__dict__.values()
-        if isinstance(candidate, type)
-        and candidate.__module__ == module.__name__
-        and issubclass(candidate, PolarsModel)
-        and candidate is not PolarsModel
-        and not inspect.isabstract(candidate)
+        item
+        for item in module.__dict__.values()
+        if isinstance(item, type)
+        and item.__module__ == module.__name__
+        and issubclass(item, (SourceModel, Model))
+        and item not in (SourceModel, Model, MartModel)
     ]
     if len(models) != 1:
         raise DiscoveryError.model_count(node_id, path, len(models))
     return models[0]
 
 
-def validate_model(model: type[PolarsModel[...]], path: Path, node_id: str) -> None:
-    """Validate static model metadata and its uncalled transform signature."""
-    metadata = model.__dict__.get("metadata")
-    if not isinstance(metadata, QueryMetadata):
+def validate_model(model: type[SourceModel | Model], path: Path, node_id: str) -> None:
+    tier = node_id.split(".", maxsplit=1)[0]
+    if not isinstance(model.__dict__.get("output_schema"), pl.Schema):
         raise DiscoveryError.missing_definition(
-            node_id, path, "QueryMetadata as metadata"
+            node_id, path, "output_schema: pl.Schema"
         )
-    validate_metadata(metadata, path, node_id)
-    for method_name in ("transform",):
-        if method_name not in model.__dict__:
-            raise DiscoveryError.missing_definition(node_id, path, method_name)
-    signature = inspect.signature(model.transform)
-    expected = set(metadata.inputs)
-    actual: set[str] = set()
-    for parameter in signature.parameters.values():
-        if parameter.kind not in (
-            inspect.Parameter.POSITIONAL_OR_KEYWORD,
-            inspect.Parameter.KEYWORD_ONLY,
-        ):
-            raise DiscoveryError.invalid_parameter_kind(node_id, path, "transform")
-        actual.add(parameter.name)
+    if tier == "sources":
+        if not issubclass(model, SourceModel):
+            raise DiscoveryError.invalid_placement(
+                node_id, path, "SourceModel", "sources"
+            )
+        _validate_method(model, path, node_id, "source", set())
+        return
+    if tier == "marts":
+        if not issubclass(model, MartModel):
+            raise DiscoveryError.invalid_placement(node_id, path, "MartModel", "marts")
+        if not isinstance(model.__dict__.get("output"), OutputSpec):
+            raise DiscoveryError.missing_definition(node_id, path, "output declaration")
+    elif issubclass(model, (SourceModel, MartModel)):
+        raise DiscoveryError.invalid_placement(
+            node_id, path, model.__name__, "staging or intermediate"
+        )
+    _validate_inputs(model, path, node_id)
+    _validate_method(model, path, node_id, "transform", set(model.inputs))
+
+
+def _validate_inputs(model: type[Model], path: Path, node_id: str) -> None:
+    inputs = model.__dict__.get("inputs")
+    if not isinstance(inputs, Mapping):
+        raise DiscoveryError.missing_definition(node_id, path, "inputs mapping")
+    for name, binding in inputs.items():
+        if not isinstance(name, str) or not name or not isinstance(binding, Input):
+            raise DiscoveryError.invalid_binding(node_id, path, "input", "binding")
+        if not binding.node_id or not isinstance(binding.schema, pl.Schema):
+            raise DiscoveryError.invalid_binding(
+                node_id, path, "input", "node ID or schema"
+            )
+
+
+def _validate_method(
+    model: type[SourceModel | Model],
+    path: Path,
+    node_id: str,
+    method: str,
+    expected: set[str],
+) -> None:
+    descriptor = model.__dict__.get(method)
+    if descriptor is None:
+        raise DiscoveryError.missing_definition(node_id, path, method)
+    if isinstance(descriptor, (classmethod, staticmethod)):
+        raise DiscoveryError.invalid_method(node_id, path, method)
+    parameters = list(inspect.signature(descriptor).parameters.values())
+    if not parameters or parameters[0].name != "self":
+        raise DiscoveryError.invalid_method(node_id, path, method)
+    named = parameters[1:]
+    if any(
+        parameter.kind not in (parameter.POSITIONAL_OR_KEYWORD, parameter.KEYWORD_ONLY)
+        for parameter in named
+    ):
+        raise DiscoveryError.invalid_parameter_kind(node_id, path, method)
+    actual = {parameter.name for parameter in named}
     if actual != expected:
         raise DiscoveryError.binding_signature_mismatch(
-            node_id, path, "transform", actual, expected
+            node_id, path, method, actual, expected
         )
-
-
-def validate_metadata(metadata: QueryMetadata, path: Path, node_id: str) -> None:
-    """Validate named source contracts without executing a model."""
-    if not isinstance(metadata.output_schema, pl.Schema):
-        raise DiscoveryError.invalid_binding(node_id, path, "metadata", "output schema")
-    for argument, source in metadata.inputs.items():
-        if not isinstance(argument, str) or not argument:
-            raise DiscoveryError.invalid_binding(node_id, path, "input", "argument")
-        if not isinstance(source, (Source, QuerySource)):
-            raise DiscoveryError.invalid_source(node_id, path)
-        if not isinstance(source.schema, pl.Schema):
-            raise DiscoveryError.invalid_binding(node_id, path, "input", "schema")
-        if isinstance(source, QuerySource) and (
-            not isinstance(source.node_id, str) or not source.node_id
-        ):
-            raise DiscoveryError.invalid_binding(
-                node_id, path, "query source", "node ID"
-            )
