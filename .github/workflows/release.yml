@@ -101,17 +101,17 @@ jobs:
           )"
           cd "${RUNNER_TEMP}"
           uv run --isolated --no-project --python "${PYTHON_VERSION}" --with "${WHEEL_PATH}" python - <<'PY'
-           import os
-           import subprocess
-           import sys
-           from importlib.metadata import metadata
-           from pathlib import Path
+          import os
+          import subprocess
+          import sys
+          from importlib.metadata import metadata
+          from pathlib import Path
 
-           import polars as pl
+          import polars as pl
 
-           assert metadata("polars-pipeliner")["Name"] == "polars-pipeliner"
-           import polars_pipeliner
-           assert polars_pipeliner.__name__ == "polars_pipeliner"
+          assert metadata("polars-pipeliner")["Name"] == "polars-pipeliner"
+          import polars_pipeliner
+          assert polars_pipeliner.__name__ == "polars_pipeliner"
 
           example_root = Path(os.environ["EXAMPLE_RUN"]).parent
           target = example_root / "target"
