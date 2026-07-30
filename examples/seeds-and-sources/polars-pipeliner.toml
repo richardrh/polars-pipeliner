@@ -1,0 +1,3 @@
+[polars-pipeliner]
+LOG_LEVEL = "INFO"
+RUN_LOG_DIR = "target/runs"

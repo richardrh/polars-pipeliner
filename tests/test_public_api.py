@@ -52,14 +52,14 @@ def test_public_model_classes_use_ordinary_instance_methods() -> None:
             return pl.LazyFrame({"id": [1]})
 
     class CleanOrders(Model):
-        inputs = {"orders": Input("sources.orders", schema=Orders.output_schema)}
+        orders = Input("sources.orders", schema=Orders.output_schema)
         output_schema = Orders.output_schema
 
         def transform(self, orders: pl.LazyFrame) -> pl.LazyFrame:
             return orders
 
     class OrdersMart(MartModel):
-        inputs = CleanOrders.inputs
+        orders = Input("sources.orders", schema=Orders.output_schema)
         output_schema = CleanOrders.output_schema
         output = Output.parquet("target/orders.parquet")
 

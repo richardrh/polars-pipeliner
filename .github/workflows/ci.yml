@@ -68,20 +68,25 @@ jobs:
           WHEEL_PATH="$(python - <<'PY'
           from pathlib import Path
 
-          wheels = sorted(Path('dist').glob('polars_build_tool-*.whl'))
+          wheels = sorted(Path('dist').glob('polars_pipeliner-*.whl'))
           if len(wheels) != 1:
-              raise SystemExit(f'expected exactly one polars-build-tool wheel, found {len(wheels)}: {wheels}')
+              raise SystemExit(f'expected exactly one polars-pipeliner wheel, found {len(wheels)}: {wheels}')
           print(wheels[0].resolve())
           PY
           )"
           cd "${RUNNER_TEMP}"
           uv run --isolated --no-project --python "${PYTHON_VERSION}" --with "${WHEEL_PATH}" python - <<'PY'
-          import os
-          import subprocess
-          import sys
-          from pathlib import Path
+           import os
+           import subprocess
+           import sys
+           from importlib.metadata import metadata
+           from pathlib import Path
 
-          import polars as pl
+           import polars as pl
+
+           assert metadata("polars-pipeliner")["Name"] == "polars-pipeliner"
+           import polars_pipeliner
+           assert polars_pipeliner.__name__ == "polars_pipeliner"
 
           example_root = Path(os.environ["EXAMPLE_RUN"]).parent
           target = example_root / "target"

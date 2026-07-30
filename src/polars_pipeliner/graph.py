@@ -9,7 +9,7 @@ from types import MappingProxyType
 
 from .discovery import ModelNode
 from .errors import QueryValidationError
-from .model import Model, SourceModel
+from .model import Model, SourceModel, _declared_inputs
 
 
 @dataclass(frozen=True)
@@ -24,7 +24,9 @@ class ModelGraph:
             {
                 node_id: ()
                 if issubclass(node.model, SourceModel)
-                else tuple(binding.node_id for binding in node.model.inputs.values())
+                else tuple(
+                    binding.node_id for binding in _declared_inputs(node.model).values()
+                )
                 for node_id, node in stable_nodes.items()
             }
         )
@@ -35,7 +37,7 @@ class ModelGraph:
                     node_id, node.path, missing
                 )
             if issubclass(node.model, Model):
-                for name, binding in node.model.inputs.items():
+                for name, binding in _declared_inputs(node.model).items():
                     producer = stable_nodes[binding.node_id].model
                     if binding.schema != producer.output_schema:
                         raise QueryValidationError.query_source_schema_mismatch(

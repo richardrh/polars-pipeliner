@@ -2,18 +2,25 @@ import polars as pl
 
 from polars_pipeliner import Input, Model
 
-CUSTOMERS = pl.Schema(
-    {
-        "customer_id": pl.Int64,
-        "customer_name": pl.String,
-        "segment": pl.String,
-    }
-)
-
 
 class Customers(Model):
-    inputs = {"customers": Input("sources.customers", schema=CUSTOMERS)}
-    output_schema = CUSTOMERS
+    customers = Input(
+        "sources.customers",
+        schema=pl.Schema(
+            {
+                "customer_id": pl.Int64,
+                "customer_name": pl.String,
+                "segment": pl.String,
+            }
+        ),
+    )
+    output_schema = pl.Schema(
+        {
+            "customer_id": pl.Int64,
+            "customer_name": pl.String,
+            "segment": pl.String,
+        }
+    )
 
     def transform(self, customers: pl.LazyFrame) -> pl.LazyFrame:
         return customers.select(

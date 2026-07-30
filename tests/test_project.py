@@ -28,7 +28,7 @@ class Orders(SourceModel):
 
 def transform_model(
     *,
-    inputs: str = "{}",
+    input_declarations: str = "",
     parameters: str = "",
     body: str = "return pl.LazyFrame({'value': [1]})",
     base: str = "Model",
@@ -37,7 +37,7 @@ def transform_model(
 from polars_pipeliner import Input, {base}
 SCHEMA = {SCHEMA}
 class Orders({base}):
-    inputs = {inputs}
+    {input_declarations}
     output_schema = {SCHEMA}
     def transform(self, {parameters}) -> pl.LazyFrame:
         {body}
@@ -120,7 +120,7 @@ def test_inputs_signature_and_schema_edges_are_validated_without_execution(
         tmp_path,
         "staging/orders.py",
         transform_model(
-            inputs="{'orders': Input('sources.orders', schema=pl.Schema({'other': pl.Int64}))}",
+            input_declarations="orders = Input('sources.orders', schema=pl.Schema({'other': pl.Int64}))",
             parameters="orders",
             body="raise AssertionError('not called')",
         ),
@@ -131,7 +131,7 @@ def test_inputs_signature_and_schema_edges_are_validated_without_execution(
         tmp_path,
         "staging/orders.py",
         transform_model(
-            inputs="{'orders': Input('sources.orders', schema=SCHEMA)}",
+            input_declarations="orders = Input('sources.orders', schema=SCHEMA)",
             parameters="other",
             body="return other",
         ),
@@ -145,7 +145,7 @@ def test_missing_dependencies_and_cycles_are_rejected(tmp_path: Path) -> None:
         tmp_path,
         "staging/orders.py",
         transform_model(
-            inputs="{'missing': Input('sources.missing', schema=SCHEMA)}",
+            input_declarations="missing = Input('sources.missing', schema=SCHEMA)",
             parameters="missing",
             body="return missing",
         ),
@@ -157,7 +157,7 @@ def test_missing_dependencies_and_cycles_are_rejected(tmp_path: Path) -> None:
         tmp_path,
         "staging/a.py",
         transform_model(
-            inputs="{'b': Input('intermediate.b', schema=SCHEMA)}",
+            input_declarations="b = Input('intermediate.b', schema=SCHEMA)",
             parameters="b",
             body="return b",
         ),
@@ -166,7 +166,7 @@ def test_missing_dependencies_and_cycles_are_rejected(tmp_path: Path) -> None:
         tmp_path,
         "intermediate/b.py",
         transform_model(
-            inputs="{'a': Input('staging.a', schema=SCHEMA)}",
+            input_declarations="a = Input('staging.a', schema=SCHEMA)",
             parameters="a",
             body="return a",
         ),
@@ -181,7 +181,7 @@ def test_non_mart_output_is_ignored(tmp_path: Path) -> None:
         tmp_path,
         "staging/orders.py",
         transform_model(
-            inputs="{'orders': Input('sources.orders', schema=SCHEMA)}",
+            input_declarations="orders = Input('sources.orders', schema=SCHEMA)",
             parameters="orders",
             body="return orders",
         )
@@ -202,4 +202,108 @@ def test_mart_requires_a_valid_output_declaration(tmp_path: Path) -> None:
     )
 
     with pytest.raises(DiscoveryError, match="output declaration"):
+        discover(tmp_path)
+
+
+def test_direct_input_attributes_allow_zero_one_and_multiple_inputs(
+    tmp_path: Path,
+) -> None:
+    write_model(tmp_path, "sources/orders.py", source_model())
+    write_model(
+        tmp_path,
+        "staging/empty.py",
+        transform_model(body="return pl.LazyFrame({'value': [1]})"),
+    )
+    write_model(
+        tmp_path,
+        "staging/one.py",
+        transform_model(
+            input_declarations="orders = Input('sources.orders', schema=SCHEMA)",
+            parameters="orders",
+            body="return orders",
+        ),
+    )
+    write_model(
+        tmp_path,
+        "intermediate/multiple.py",
+        transform_model(
+            input_declarations=(
+                "orders = Input('sources.orders', schema=SCHEMA)\n"
+                "    copy = Input('staging.one', schema=SCHEMA)"
+            ),
+            parameters="orders, copy",
+            body="return orders",
+        ),
+    )
+
+    assert discover(tmp_path).resolve() == (
+        "sources.orders",
+        "staging.empty",
+        "staging.one",
+        "intermediate.multiple",
+    )
+
+
+@pytest.mark.parametrize("relative", ["staging/orders.py", "sources/orders.py"])
+def test_legacy_inputs_mapping_is_rejected_at_discovery(
+    tmp_path: Path, relative: str
+) -> None:
+    source = (
+        source_model()
+        .replace(
+            "    def source",
+            "    inputs = {'orders': Input('sources.orders', schema=pl.Schema({'value': pl.Int64}))}\n\n    def source",
+        )
+        .replace(
+            "from polars_pipeliner import SourceModel",
+            "from polars_pipeliner import Input, SourceModel",
+        )
+    )
+    write_model(
+        tmp_path,
+        relative,
+        source
+        if relative.startswith("sources")
+        else transform_model(
+            input_declarations="inputs = {'orders': Input('sources.orders', schema=SCHEMA)}",
+            parameters="orders",
+            body="return orders",
+        ),
+    )
+
+    with pytest.raises(DiscoveryError, match=r"inputs = \{\.\.\.\} is not supported"):
+        discover(tmp_path)
+
+
+def test_an_input_named_inputs_is_a_valid_direct_declaration(tmp_path: Path) -> None:
+    write_model(tmp_path, "sources/orders.py", source_model())
+    write_model(
+        tmp_path,
+        "staging/orders.py",
+        transform_model(
+            input_declarations="inputs = Input('sources.orders', schema=SCHEMA)",
+            parameters="inputs",
+            body="return inputs",
+        ),
+    )
+
+    assert discover(tmp_path).node_ids == ("sources.orders", "staging.orders")
+
+
+def test_sources_may_not_declare_inputs(tmp_path: Path) -> None:
+    write_model(
+        tmp_path,
+        "sources/orders.py",
+        source_model()
+        .replace(
+            "    def source",
+            "    orders = Input('sources.orders', schema=pl.Schema({'value': pl.Int64}))\n\n    def source",
+        )
+        .replace(
+            "from polars_pipeliner import SourceModel",
+            "from polars_pipeliner import Input, SourceModel",
+        ),
+    )
+
+    with pytest.raises(DiscoveryError, match="may not declare Input attributes"):
         discover(tmp_path)

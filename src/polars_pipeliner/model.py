@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import ClassVar
 
@@ -35,7 +36,6 @@ class SourceModel:
 class Model:
     """A model that transforms named upstream LazyFrames."""
 
-    inputs: ClassVar[dict[str, Input]]
     output_schema: ClassVar[pl.Schema]
 
 
@@ -43,3 +43,12 @@ class MartModel(Model):
     """A materialized model with an executor-owned output declaration."""
 
     output: ClassVar[OutputSpec]
+
+
+def _declared_inputs(model: type[SourceModel | Model]) -> Mapping[str, Input]:
+    """Return Input bindings declared directly on a concrete model class."""
+    return {
+        name: binding
+        for name, binding in model.__dict__.items()
+        if isinstance(binding, Input)
+    }
