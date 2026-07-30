@@ -66,9 +66,7 @@ class EnrichedOrders(Model):
     customers = Input("staging.customers", schema=CUSTOMERS_SCHEMA)
     output_schema = ENRICHED_ORDERS_SCHEMA
 
-    def transform(
-        self, orders: pl.LazyFrame, customers: pl.LazyFrame
-    ) -> pl.LazyFrame:
+    def transform(self, orders: pl.LazyFrame, customers: pl.LazyFrame) -> pl.LazyFrame:
         return orders.join(customers, on="customer_id")
 ```
 
