@@ -12,9 +12,7 @@ from polars_pipeliner import Input, MartModel, Output
 
 
 ORDER_LINES_SCHEMA = pl.Schema({"customer_id": pl.Int64, "line_total": pl.Float64})
-CUSTOMER_ORDERS_SCHEMA = pl.Schema(
-    {"customer_id": pl.Int64, "total_spend": pl.Float64}
-)
+CUSTOMER_ORDERS_SCHEMA = pl.Schema({"customer_id": pl.Int64, "total_spend": pl.Float64})
 
 
 class CustomerOrders(MartModel):
