@@ -4,11 +4,11 @@ import polars as pl
 
 from polars_pipeliner import SourceModel
 
-ORDERS = pl.Schema({"order_id": pl.Int64, "country": pl.String, "amount": pl.Float64})
-
 
 class Orders(SourceModel):
-    output_schema = ORDERS
+    output_schema = pl.Schema(
+        {"order_id": pl.Int64, "country": pl.String, "amount": pl.Float64}
+    )
 
     def source(self) -> pl.LazyFrame:
         return pl.scan_parquet(Path(__file__).parents[1] / "data" / "orders.parquet")

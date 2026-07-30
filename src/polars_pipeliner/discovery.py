@@ -13,7 +13,7 @@ from pathlib import Path
 import polars as pl
 
 from .errors import DiscoveryError
-from .model import Input, MartModel, Model, SourceModel
+from .model import Input, MartModel, Model, SourceModel, _declared_inputs
 from .output import OutputSpec
 
 MODEL_DIRECTORIES = ("sources", "staging", "intermediate", "marts")
@@ -85,11 +85,15 @@ def validate_model(model: type[SourceModel | Model], path: Path, node_id: str) -
         raise DiscoveryError.missing_definition(
             node_id, path, "output_schema: pl.Schema"
         )
+    if isinstance(model.__dict__.get("inputs"), Mapping):
+        raise DiscoveryError.legacy_inputs_mapping(node_id, path)
     if tier == "sources":
         if not issubclass(model, SourceModel):
             raise DiscoveryError.invalid_placement(
                 node_id, path, "SourceModel", "sources"
             )
+        if _declared_inputs(model):
+            raise DiscoveryError.source_inputs(node_id, path)
         _validate_method(model, path, node_id, "source", set())
         return
     if tier == "marts":
@@ -101,21 +105,20 @@ def validate_model(model: type[SourceModel | Model], path: Path, node_id: str) -
         raise DiscoveryError.invalid_placement(
             node_id, path, model.__name__, "staging or intermediate"
         )
-    _validate_inputs(model, path, node_id)
-    _validate_method(model, path, node_id, "transform", set(model.inputs))
+    inputs = _validate_inputs(model, path, node_id)
+    _validate_method(model, path, node_id, "transform", set(inputs))
 
 
-def _validate_inputs(model: type[Model], path: Path, node_id: str) -> None:
-    inputs = model.__dict__.get("inputs")
-    if not isinstance(inputs, Mapping):
-        raise DiscoveryError.missing_definition(node_id, path, "inputs mapping")
-    for name, binding in inputs.items():
-        if not isinstance(name, str) or not name or not isinstance(binding, Input):
-            raise DiscoveryError.invalid_binding(node_id, path, "input", "binding")
+def _validate_inputs(
+    model: type[Model], path: Path, node_id: str
+) -> Mapping[str, Input]:
+    inputs = _declared_inputs(model)
+    for binding in inputs.values():
         if not binding.node_id or not isinstance(binding.schema, pl.Schema):
             raise DiscoveryError.invalid_binding(
                 node_id, path, "input", "node ID or schema"
             )
+    return inputs
 
 
 def _validate_method(

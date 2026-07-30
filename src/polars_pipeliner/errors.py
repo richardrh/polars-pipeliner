@@ -26,6 +26,11 @@ def _redact_uris(text: str) -> str:
     return URI_PATTERN.sub(redact, text)
 
 
+def redact_text(text: str) -> str:
+    """Redact URI credentials, queries, and fragments in public text."""
+    return _redact_uris(text)
+
+
 def redact_exception(error: Exception) -> Exception:
     """Return an equivalent exception whose text does not expose URI secrets."""
     detail = _redact_uris(str(error))
@@ -38,7 +43,13 @@ def redact_exception(error: Exception) -> Exception:
 
 
 class QueryError(Exception):
-    """Base exception for query-project failures."""
+    """Base exception for model-project failures."""
+
+    def __init__(
+        self, message: str, *, context: dict[str, object] | None = None
+    ) -> None:
+        super().__init__(message)
+        self.context = context or {}
 
 
 class ConfigError(QueryError):
@@ -49,6 +60,10 @@ class ConfigError(QueryError):
         return cls(
             f"Invalid LOG_LEVEL {actual!r}; expected one of: {', '.join(sorted(valid))}"
         )
+
+    @classmethod
+    def invalid_run_log_dir(cls, actual: object) -> ConfigError:
+        return cls(f"Invalid RUN_LOG_DIR {actual!r}; expected a path")
 
     @classmethod
     def missing_file(cls, path: Path) -> ConfigError:
@@ -94,7 +109,7 @@ class DiscoveryError(QueryError):
 
     @classmethod
     def invalid_root(cls, root: Path) -> DiscoveryError:
-        return cls(f"Query root is not a directory: {root}")
+        return cls(f"Project root is not a directory: {root}")
 
     @classmethod
     def import_spec(cls, path: Path) -> DiscoveryError:
@@ -109,7 +124,7 @@ class DiscoveryError(QueryError):
     @classmethod
     def model_count(cls, node_id: str, path: Path, count: int) -> DiscoveryError:
         return cls(
-            f"Query {node_id} ({path}) must define exactly one local concrete "
+            f"Model {node_id} ({path}) must define exactly one local concrete "
             f"model class; found {count}"
         )
 
@@ -117,13 +132,13 @@ class DiscoveryError(QueryError):
     def missing_definition(
         cls, node_id: str, path: Path, definition: str
     ) -> DiscoveryError:
-        return cls(f"Query {node_id} ({path}) must define its own {definition}")
+        return cls(f"Model {node_id} ({path}) must define its own {definition}")
 
     @classmethod
     def invalid_parameter_kind(
         cls, node_id: str, path: Path, method: str
     ) -> DiscoveryError:
-        return cls(f"Query {node_id} ({path}) {method} may only use named parameters")
+        return cls(f"Model {node_id} ({path}) {method} may only use named parameters")
 
     @classmethod
     def binding_signature_mismatch(
@@ -135,7 +150,7 @@ class DiscoveryError(QueryError):
         expected: Iterable[str],
     ) -> DiscoveryError:
         return cls(
-            f"Query {node_id} ({path}) {method} parameters {sorted(actual)!r} do not "
+            f"Model {node_id} ({path}) {method} parameters {sorted(actual)!r} do not "
             f"exactly match declared bindings {sorted(expected)!r}"
         )
 
@@ -143,11 +158,22 @@ class DiscoveryError(QueryError):
     def invalid_binding(
         cls, node_id: str, path: Path, label: str, kind: str
     ) -> DiscoveryError:
-        return cls(f"Query {node_id} ({path}) has an invalid {label} {kind}")
+        return cls(f"Model {node_id} ({path}) has an invalid {label} {kind}")
+
+    @classmethod
+    def legacy_inputs_mapping(cls, node_id: str, path: Path) -> DiscoveryError:
+        return cls(
+            f"Model {node_id} ({path}) must declare each Input directly as a class "
+            "attribute; inputs = {...} is not supported"
+        )
+
+    @classmethod
+    def source_inputs(cls, node_id: str, path: Path) -> DiscoveryError:
+        return cls(f"Source model {node_id} ({path}) may not declare Input attributes")
 
     @classmethod
     def invalid_source(cls, node_id: str, path: Path) -> DiscoveryError:
-        return cls(f"Query {node_id} ({path}) has an invalid input source")
+        return cls(f"Model {node_id} ({path}) has an invalid input source")
 
     @classmethod
     def invalid_placement(
@@ -176,8 +202,9 @@ class QueryValidationError(QueryError):
         cls, node_id: str, path: Path, dependencies: Iterable[str]
     ) -> QueryValidationError:
         return cls(
-            f"Query {node_id} ({path}) depends on missing node(s): "
-            f"{', '.join(dependencies)}"
+            f"Model {node_id} ({path}) depends on missing node(s): "
+            f"{', '.join(dependencies)}",
+            context={"node_id": node_id, "path": path},
         )
 
     @classmethod
@@ -197,8 +224,16 @@ class QueryValidationError(QueryError):
         actual: object,
     ) -> QueryValidationError:
         return cls(
-            f"Query {node_id} ({path}) input {argument!r} expects schema {expected} "
-            f"from {producer!r}, but its declared output schema is {actual}"
+            f"Model {node_id} ({path}) input {argument!r} expects schema {expected} "
+            f"from {producer!r}, but its declared output schema is {actual}",
+            context={
+                "node_id": node_id,
+                "path": path,
+                "argument": argument,
+                "producer": producer,
+                "expected_schema": expected,
+                "actual_schema": actual,
+            },
         )
 
 
@@ -209,7 +244,10 @@ class QueryBuildError(QueryError):
     def model_failed(
         cls, node_id: str, path: Path, detail: Exception
     ) -> QueryBuildError:
-        return cls(f"Failed to build {node_id} ({path}): {detail}")
+        return cls(
+            f"Failed to build {node_id} ({path}): {detail}",
+            context={"node_id": node_id, "path": path},
+        )
 
     @classmethod
     def source_failed(cls, location: str, detail: Exception) -> QueryBuildError:
@@ -247,27 +285,31 @@ class QueryExecutionError(QueryError):
 class ModelValidationError(ValueError):
     """A model returned an invalid lazy plan or output schema."""
 
+    def __init__(
+        self, message: str, *, context: dict[str, object] | None = None
+    ) -> None:
+        super().__init__(message)
+        self.context = context or {}
+
     @classmethod
     def schema_resolution_failed(
         cls, model: type[object], detail: Exception
     ) -> ModelValidationError:
-        return cls(
-            f"{model.__module__}.{model.__qualname__}: could not resolve output "
-            f"schema: {detail}"
-        )
+        return cls(f"{model.__qualname__}: could not resolve output schema: {detail}")
 
     @classmethod
     def schema_mismatch(
         cls, model: object, expected: object, actual: object
     ) -> ModelValidationError:
         return cls(
-            f"{type(model).__module__}.{type(model).__qualname__}: output schema mismatch; "
-            f"expected {expected}, got {actual}"
+            f"{type(model).__qualname__}: output schema mismatch; "
+            f"expected {expected}, got {actual}",
+            context={"expected_schema": expected, "actual_schema": actual},
         )
 
     @classmethod
     def non_lazy_frame(cls, model: object, actual: object) -> ModelValidationError:
         return cls(
-            f"{type(model).__module__}.{type(model).__qualname__}: model method returned "
+            f"{type(model).__qualname__}: model method returned "
             f"{type(actual).__name__}, not polars.LazyFrame"
         )

@@ -1,15 +1,18 @@
 [project]
-name = "polars-build-tool"
+name = "polars-pipeliner"
 version = "0.1.0"
 description = "Build and run dependency-ordered Polars LazyFrame queries"
 readme = "README.md"
 authors = [
-    { name = "rh" }
+    { name = "richardrh@github.com" }
 ]
 requires-python = ">=3.13"
 dependencies = [
     "polars>=1.38.1",
 ]
+
+[project.scripts]
+polars-pipeliner = "polars_pipeliner.cli:main"
 
 [build-system]
 requires = ["uv_build>=0.11.6,<0.12.0"]
@@ -25,7 +28,6 @@ dev = [
     "pytest>=9.1.1",
     "ruff>=0.16.0",
     "ty>=0.0.63",
-    "zensical>=0.0.51",
 ]
 
 [tool.pytest.ini_options]

@@ -26,7 +26,7 @@ class Node(SourceModel):
             root.joinpath(f"staging/node_{index}.py").write_text(f"""import polars as pl
 from polars_pipeliner import Input, Model
 class Node(Model):
-    inputs = {{'upstream': Input('{("sources.node_0" if index == 1 else f"staging.node_{index - 1}")}', schema=pl.Schema({{'value': pl.Int64}}))}}
+    upstream = Input('{("sources.node_0" if index == 1 else f"staging.node_{index - 1}")}', schema=pl.Schema({{'value': pl.Int64}}))
     output_schema = pl.Schema({{'value': pl.Int64}})
     def transform(self, upstream: pl.LazyFrame) -> pl.LazyFrame:
         return upstream

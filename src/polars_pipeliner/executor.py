@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -17,8 +18,9 @@ from .errors import (
     QueryExecutionError,
     redact_exception,
 )
+from .events import RunEvents
 from .graph import ModelGraph
-from .model import MartModel, SourceModel
+from .model import MartModel, SourceModel, _declared_inputs
 from .output import (
     CsvOutput,
     DeltaOutput,
@@ -35,13 +37,22 @@ class BuildResult:
     """Validated lazy plans for the complete discovered graph."""
 
     frames: Mapping[str, pl.LazyFrame]
+    schemas: Mapping[str, pl.Schema]
 
 
-def build_models(graph: ModelGraph) -> BuildResult:
+def build_models(
+    graph: ModelGraph,
+    events: RunEvents | None = None,
+    *,
+    include_event_schema: bool = False,
+    validated_nodes: set[str] | None = None,
+) -> BuildResult:
     """Call every source/transform once and validate every resulting schema."""
     frames: dict[str, pl.LazyFrame] = {}
+    schemas: dict[str, pl.Schema] = {}
     for node_id in graph.resolve():
         node = graph.nodes[node_id]
+        started = time.monotonic()
         try:
             model = node.model()
             if isinstance(model, SourceModel):
@@ -51,7 +62,7 @@ def build_models(graph: ModelGraph) -> BuildResult:
                 frame = transform(
                     **{
                         name: frames[binding.node_id]
-                        for name, binding in model.inputs.items()
+                        for name, binding in _declared_inputs(type(model)).items()
                     }
                 )
             if not isinstance(frame, pl.LazyFrame):
@@ -66,7 +77,35 @@ def build_models(graph: ModelGraph) -> BuildResult:
                 node_id, node.path, error
             ) from redact_exception(error)
         frames[node_id] = frame
-    return BuildResult(MappingProxyType(frames))
+        schemas[node_id] = actual
+        if validated_nodes is not None:
+            validated_nodes.add(node_id)
+        if events is not None:
+            model_type = (
+                "source"
+                if issubclass(node.model, SourceModel)
+                else "mart"
+                if issubclass(node.model, MartModel)
+                else "transform"
+            )
+            if include_event_schema:
+                events.emit(
+                    "model_validated",
+                    node_id=node_id,
+                    path=node.path,
+                    type=model_type,
+                    schema=actual,
+                    duration=round(time.monotonic() - started, 6),
+                )
+            else:
+                events.emit(
+                    "model_validated",
+                    node_id=node_id,
+                    path=node.path,
+                    type=model_type,
+                    duration=round(time.monotonic() - started, 6),
+                )
+    return BuildResult(MappingProxyType(frames), MappingProxyType(schemas))
 
 
 def _destination(spec: OutputSpec, root: Path) -> str | Path:
@@ -122,9 +161,11 @@ def _lazy_sink(
     return result
 
 
-def run_models(graph: ModelGraph, root: Path) -> Mapping[str, str | Path]:
+def run_models(
+    graph: ModelGraph, root: Path, events: RunEvents | None = None
+) -> Mapping[str, str | Path]:
     """Validate all plans before writing every mart, then return its manifest."""
-    built = build_models(graph)
+    built = build_models(graph, events)
     marts = [
         (node_id, node)
         for node_id, node in graph.nodes.items()
@@ -167,6 +208,9 @@ def run_models(graph: ModelGraph, root: Path) -> Mapping[str, str | Path]:
                 ],
                 error,
             ) from redact_exception(error)
+        if events is not None:
+            for node_id, destination, _, _ in file_outputs:
+                events.emit("output_written", node_id=node_id, path=destination)
     for node_id, direct_frame, spec, destination in direct:
         try:
             _make_parent(destination)
@@ -178,6 +222,8 @@ def run_models(graph: ModelGraph, root: Path) -> Mapping[str, str | Path]:
                 direct_frame.sink_iceberg(
                     destination, mode=spec.mode
                 )  # direct, non-composable API
+            if events is not None:
+                events.emit("output_written", node_id=node_id, path=destination)
         except Exception as error:
             raise QueryExecutionError.output_failed(
                 node_id, str(manifest[node_id]), error

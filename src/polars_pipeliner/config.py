@@ -1,17 +1,17 @@
-"""Typed project configuration and package-owned logging setup."""
+"""Typed project configuration."""
 
 from __future__ import annotations
 
-import logging
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Final, TextIO, cast
+from typing import Final, cast
 
 from .errors import ConfigError
 
-CONFIG_TABLE: Final = "polars-build-tool"
-DEFAULT_LOG_LEVEL: Final = "WARNING"
+CONFIG_TABLE: Final = "polars-pipeliner"
+DEFAULT_LOG_LEVEL: Final = "INFO"
+DEFAULT_RUN_LOG_DIR: Final = Path("target/runs")
 VALID_LOG_LEVELS: Final = frozenset({"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"})
 
 
@@ -20,14 +20,13 @@ class ProjectConfig:
     """Runtime configuration for a discovered project."""
 
     log_level: str = DEFAULT_LOG_LEVEL
+    run_log_dir: Path = DEFAULT_RUN_LOG_DIR
 
     def __post_init__(self) -> None:
         if self.log_level not in VALID_LOG_LEVELS:
             raise ConfigError.invalid_log_level(self.log_level, VALID_LOG_LEVELS)
-
-
-class PackageLogHandler(logging.StreamHandler[TextIO]):
-    """A marker handler owned exclusively by this package."""
+        if not isinstance(self.run_log_dir, Path):
+            raise ConfigError.invalid_run_log_dir(self.run_log_dir)
 
 
 def load_config(path: str | Path | None = None) -> ProjectConfig:
@@ -50,7 +49,7 @@ def load_config(path: str | Path | None = None) -> ProjectConfig:
     if not isinstance(table, dict):
         raise ConfigError.missing_table(config_path, CONFIG_TABLE)
     table = cast(dict[str, object], table)
-    unknown = sorted(set(table).difference({"LOG_LEVEL"}))
+    unknown = sorted(set(table).difference({"LOG_LEVEL", "RUN_LOG_DIR"}))
     if unknown:
         raise ConfigError.unknown_settings(config_path, unknown)
     if "LOG_LEVEL" not in table:
@@ -58,19 +57,13 @@ def load_config(path: str | Path | None = None) -> ProjectConfig:
     log_level = table["LOG_LEVEL"]
     if not isinstance(log_level, str):
         raise ConfigError.non_string_setting(config_path, "LOG_LEVEL")
+    configured_run_log_dir = table.get("RUN_LOG_DIR")
+    if configured_run_log_dir is not None and not isinstance(
+        configured_run_log_dir, str
+    ):
+        raise ConfigError.non_string_setting(config_path, "RUN_LOG_DIR")
+    run_log_dir = Path(configured_run_log_dir or DEFAULT_RUN_LOG_DIR)
     try:
-        return ProjectConfig(log_level=log_level)
+        return ProjectConfig(log_level=log_level, run_log_dir=run_log_dir)
     except ConfigError as error:
         raise ConfigError.invalid_setting(config_path, error) from error
-
-
-def configure_logging(config: ProjectConfig) -> logging.Logger:
-    """Configure only the package logger, with exactly one owned stderr handler."""
-    logger = logging.getLogger("polars_pipeliner")
-    logger.setLevel(config.log_level)
-    logger.propagate = False
-    if not any(isinstance(handler, PackageLogHandler) for handler in logger.handlers):
-        handler = PackageLogHandler()
-        handler.setFormatter(logging.Formatter("%(levelname)s %(name)s: %(message)s"))
-        logger.addHandler(handler)
-    return logger

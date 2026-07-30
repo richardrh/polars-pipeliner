@@ -24,6 +24,9 @@ target/
 .mypy_cache/
 .ruff_cache/
 .ty_cache/
+docs/node_modules/
+docs/.vitepress/cache/
+docs/.vitepress/dist/
 
 # Editor and OS files
 .idea/

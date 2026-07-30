@@ -7,7 +7,7 @@ from polars_pipeliner import discover
 
 def main() -> None:
     root = Path(__file__).parent
-    project = discover(root, config_path=root / "polars-build-tool.toml")
+    project = discover(root, config_path=root / "polars-pipeliner.toml")
     manifest = project.run()
     print("Manifest:", manifest)
     print("Revenue by region:")

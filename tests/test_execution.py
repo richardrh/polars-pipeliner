@@ -32,7 +32,7 @@ def mart(name: str, output: str, body: str = "return orders") -> str:
 from polars_pipeliner import Input, MartModel, Output
 SCHEMA = pl.Schema({{'value': pl.Int64}})
 class {name}(MartModel):
-    inputs = {{'orders': Input('sources.orders', schema=SCHEMA)}}
+    orders = Input('sources.orders', schema=SCHEMA)
     output_schema = SCHEMA
     output = {output}
     def transform(self, orders: pl.LazyFrame) -> pl.LazyFrame:
@@ -110,7 +110,7 @@ import polars as pl
 from polars_pipeliner import Input, MartModel, Output
 SCHEMA = pl.Schema({'value': pl.Int64})
 class Orders(MartModel):
-    inputs = {'orders': Input('sources.orders', schema=SCHEMA)}
+    orders = Input('sources.orders', schema=SCHEMA)
     output_schema = SCHEMA
     output = Output.parquet('out.parquet')
     def __init__(self) -> None:
@@ -171,7 +171,6 @@ def test_bad_return_schema_and_no_marts_fail_before_writes(tmp_path: Path) -> No
         """import polars as pl
 from polars_pipeliner import Model
 class Orders(Model):
-    inputs = {}
     output_schema = pl.Schema({'value': pl.Int64})
     def transform(self) -> pl.LazyFrame:
         return pl.LazyFrame({'value': [1]})

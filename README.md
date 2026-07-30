@@ -1,120 +1,114 @@
-# polars-build-tool
+# polars-pipeliner
 
-## What is it?
+## Designed for analytical LLM workflows
 
-`polars-build-tool` discovers and runs dependency-ordered Polars `LazyFrame`
-models. It validates model schemas before writing any mart output.
+- Designed for use in agentic workflows where agents will write one or more
+  queries.
+- Non-Agent workflows still works well - provides the structure your analytics
+  pipelines need to validate inputs, outputs and execute them in correct sequence.
+
+## What is polars-pipeliner?
+
+This is a tool to automatically discover and execute Polars queries using
+dbt style folder structure to organize an analysis run.
+
+Executes queries in the correct sequence and leverages Polars' lazy loading
+and optimizations.
 
 ## What problem does it solve?
 
-Polars provides fast, typed transformations; this package supplies a small,
-file-based project layout for connecting sources, transformations, and durable
-mart outputs without query wrappers or decorators.
+Dbt is too heavyweight, alternatives run on SQL only meaning they are not
+type checked and schema checked.
+
+Polars-pipeliner defines a contract that each Polars query must match.
+Input and output data schemas are checked, the pipeline errors if they fail.
+
+### Other features
+
+- Validation of every transformation
+- Structured logging
+- Validate the execution plan up front
+- Python and CLI APIs
 
 ## Example
 
-```text
-project/
-├── seeds/
-│   ├── customers.csv
-│   ├── products.csv
-│   └── orders.csv
-├── sources/
-│   ├── customers.py
-│   ├── products.py
-│   └── orders.py
-├── staging/
-│   ├── customers.py
-│   ├── products.py
-│   └── orders.py
-├── intermediate/order_lines.py
-├── marts/customer_orders.py
-└── run.py
-```
-
-`sources/customers.py` contains an ordinary instance method with an explicit
-source contract:
+This mart consumes typed order lines, declares its result contract, and lets the
+executor own the output destination:
 
 ```python
-from pathlib import Path
 import polars as pl
-from polars_pipeliner import SourceModel
 
-CUSTOMERS = pl.Schema(
-    {"customer_id": pl.Int64, "customer_name": pl.String, "segment": pl.String}
-)
-
-
-class Customers(SourceModel):
-    output_schema = CUSTOMERS
-
-    def source(self) -> pl.LazyFrame:
-        return pl.scan_csv(
-            Path(__file__).parents[1] / "seeds/customers.csv",
-            schema_overrides=CUSTOMERS,
-        )
-```
-
-Staged orders and products join into typed order lines with `Input` bindings:
-
-```python
-from polars_pipeliner import Input, Model
-
-
-class OrderLines(Model):
-    inputs = {
-        "orders": Input("staging.orders", schema=ORDERS),
-        "products": Input("staging.products", schema=PRODUCTS),
-    }
-    output_schema = ORDER_LINES
-
-    def transform(self, orders: pl.LazyFrame, products: pl.LazyFrame) -> pl.LazyFrame:
-        return orders.join(products, on="product_id").with_columns(
-            (pl.col("quantity") * pl.col("unit_price")).alias("line_total")
-        )
-```
-
-The customer mart left-joins those totals so customers with no orders remain in
-the result, with zero-filled aggregates. It declares an executor-owned output:
-
-```python
 from polars_pipeliner import Input, MartModel, Output
 
 
 class CustomerOrders(MartModel):
-    inputs = {
-        "customers": Input("staging.customers", schema=CUSTOMERS),
-        "order_lines": Input("intermediate.order_lines", schema=ORDER_LINES),
-    }
-    output_schema = CUSTOMER_ORDERS
+    order_lines = Input(
+        "intermediate.order_lines",
+        schema=pl.Schema({"customer_id": pl.Int64, "line_total": pl.Float64}),
+    )
+    output_schema = pl.Schema({"customer_id": pl.Int64, "total_spend": pl.Float64})
     output = Output.parquet("target/customer_orders.parquet")
 
-    def transform(
-        self, customers: pl.LazyFrame, order_lines: pl.LazyFrame
-    ) -> pl.LazyFrame:
-        customer_totals = order_lines.group_by("customer_id").agg(
-            pl.len().alias("order_count"),
-            pl.col("quantity").sum().alias("units_ordered"),
-            pl.col("line_total").sum().alias("total_spend"),
-        )
-        return customers.join(customer_totals, on="customer_id", how="left").with_columns(
-            pl.col("order_count").fill_null(0),
-            pl.col("units_ordered").fill_null(0),
-            pl.col("total_spend").fill_null(0.0),
+    def transform(self, order_lines: pl.LazyFrame) -> pl.LazyFrame:
+        return order_lines.group_by("customer_id").agg(
+            pl.col("line_total").sum().alias("total_spend")
         )
 ```
 
 ## Install and run
 
-Requires Python 3.13+ and Polars 1.38.1+. Install with `uv add polars-build-tool`,
-then run every mart:
+Requires Python 3.13+ and Polars 1.38.1+:
 
-```python
-from polars_pipeliner import discover
-
-manifest = discover("project").run()
-print(manifest)
+```bash
+uv add polars-pipeliner
+uv run polars-pipeliner run examples/customer-orders --config examples/customer-orders/polars-pipeliner.toml
 ```
 
-Run the bundled examples with `uv run python examples/customer-orders/run.py` or
-`uv run python examples/seeds-and-sources/run.py`.
+The CLI writes JSONL events to stdout and materializes
+`examples/customer-orders/target/customer_orders.parquet`. The Python API keeps
+the manifest return value:
+
+```bash
+uv run python examples/customer-orders/run.py
+```
+
+Validate declared and resolved schemas without writing a mart:
+
+```bash
+uv run polars-pipeliner validate examples/customer-orders --config examples/customer-orders/polars-pipeliner.toml
+```
+
+```python
+schemas = discover("examples/customer-orders").validate()
+```
+
+Run the second bundled example with:
+
+```bash
+uv run python examples/seeds-and-sources/run.py
+```
+
+## Run logging
+
+```toml
+[polars-pipeliner]
+LOG_LEVEL = "INFO"
+RUN_LOG_DIR = "target/runs"
+```
+
+CLI runs emit JSONL to stdout; Python runs write JSONL files to `RUN_LOG_DIR`.
+
+## Compared with Lea and dbt
+
+|                                 | polars-pipeliner                                                   | Lea                                                                       | dbt Core                                                          |
+| ------------------------------- | ------------------------------------------------------------------ | ------------------------------------------------------------------------- | ----------------------------------------------------------------- |
+| **LLM-friendly**                | Native LLM workflow tooling                                        | Simple file-based SQL; no LLM-specific interface                          | No dedicated LLM workflow                                         |
+| **Logging**                     | JSONL for CLI commands and Python runs                             | Human-oriented Rich logs; no structured JSON event stream or run artifact | Text, debug, and JSON logs; run artifacts                         |
+| **Schema validation**           | Exact input and output schema contracts at every node              | Tests and assertions; no explicit edge schema contracts                   | Optional YAML-declared output contracts; not input-edge contracts |
+| **Transformations / execution** | Python Polars `LazyFrame` models                                   | SQL scripts in a data warehouse                                           | SQL models by a data warehouse adapter                            |
+| **Best fit**                    | Schema-first native Polars pipelines, especially agentic workflows | Lightweight file-based SQL warehouse orchestration                        | Warehouse-centric SQL transformation                              |
+
+Lea and dbt Core serve different workloads. Read the fuller, source-linked
+[comparison](docs/comparison.md).
+
+Read the full [documentation](docs/index.md).
