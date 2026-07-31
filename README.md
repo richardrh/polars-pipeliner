@@ -64,6 +64,21 @@ uv add polars-pipeliner
 uv run polars-pipeliner run examples/customer-orders --config examples/customer-orders/polars-pipeliner.toml
 ```
 
+## Contributor setup
+
+Install development dependencies and the local formatting hook:
+
+```bash
+uv sync --all-groups
+uv run pre-commit install
+```
+
+To format the full repository on demand, run:
+
+```bash
+uv run pre-commit run --all-files
+```
+
 The CLI writes JSONL events to stdout and materializes
 `examples/customer-orders/target/customer_orders.parquet`. The Python API keeps
 the manifest return value:
