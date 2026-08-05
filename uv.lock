@@ -614,6 +614,7 @@ delta = [
     { name = "deltalake" },
 ]
 iceberg = [
+    { name = "polars" },
     { name = "pyiceberg", extra = ["pyarrow", "sql-sqlite"] },
 ]
 
@@ -631,6 +632,7 @@ dev = [
 requires-dist = [
     { name = "deltalake", marker = "extra == 'delta'", specifier = ">=1.6.2" },
     { name = "polars", specifier = ">=1.38.1" },
+    { name = "polars", marker = "extra == 'iceberg'", specifier = ">=1.43.1" },
     { name = "pyiceberg", extras = ["pyarrow", "sql-sqlite"], marker = "extra == 'iceberg'", specifier = ">=0.11.1" },
 ]
 provides-extras = ["delta", "iceberg"]
