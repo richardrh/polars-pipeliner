@@ -7,44 +7,48 @@ from pathlib import Path
 from typing import Literal
 
 type Destination = str | Path
+type _ParquetCompression = Literal["snappy", "gzip", "lzo", "brotli", "lz4", "zstd"]
+type _IpcCompression = Literal["uncompressed", "lz4", "zstd"]
+type _DeltaMode = Literal["error", "append", "overwrite", "ignore"]
+type _IcebergMode = Literal["append", "overwrite"]
 
 
-@dataclass(frozen=True, kw_only=True)
+@dataclass(frozen=True, kw_only=True, slots=True)
 class OutputSpec:
     """Base class for a mart output destination."""
 
     destination: Destination
 
 
-@dataclass(frozen=True, kw_only=True)
+@dataclass(frozen=True, kw_only=True, slots=True)
 class ParquetOutput(OutputSpec):
-    compression: Literal["snappy", "gzip", "lzo", "brotli", "lz4", "zstd"] = "zstd"
+    compression: _ParquetCompression = "zstd"
 
 
-@dataclass(frozen=True, kw_only=True)
+@dataclass(frozen=True, kw_only=True, slots=True)
 class CsvOutput(OutputSpec):
     separator: str = ","
     include_header: bool = True
 
 
-@dataclass(frozen=True, kw_only=True)
+@dataclass(frozen=True, kw_only=True, slots=True)
 class IpcOutput(OutputSpec):
-    compression: Literal["uncompressed", "lz4", "zstd"] = "uncompressed"
+    compression: _IpcCompression = "uncompressed"
 
 
-@dataclass(frozen=True, kw_only=True)
+@dataclass(frozen=True, kw_only=True, slots=True)
 class NdjsonOutput(OutputSpec):
     pass
 
 
-@dataclass(frozen=True, kw_only=True)
+@dataclass(frozen=True, kw_only=True, slots=True)
 class DeltaOutput(OutputSpec):
-    mode: Literal["error", "append", "overwrite", "ignore"] = "error"
+    mode: _DeltaMode = "error"
 
 
-@dataclass(frozen=True, kw_only=True)
+@dataclass(frozen=True, kw_only=True, slots=True)
 class IcebergOutput(OutputSpec):
-    mode: Literal["append", "overwrite"] = "append"
+    mode: _IcebergMode = "append"
 
 
 class Output:
@@ -54,7 +58,7 @@ class Output:
     def parquet(
         destination: Destination,
         *,
-        compression: Literal["snappy", "gzip", "lzo", "brotli", "lz4", "zstd"] = "zstd",
+        compression: _ParquetCompression = "zstd",
     ) -> ParquetOutput:
         return ParquetOutput(destination=destination, compression=compression)
 
@@ -70,7 +74,7 @@ class Output:
     def ipc(
         destination: Destination,
         *,
-        compression: Literal["uncompressed", "lz4", "zstd"] = "uncompressed",
+        compression: _IpcCompression = "uncompressed",
     ) -> IpcOutput:
         return IpcOutput(destination=destination, compression=compression)
 
@@ -82,7 +86,7 @@ class Output:
     def delta(
         destination: Destination,
         *,
-        mode: Literal["error", "append", "overwrite", "ignore"] = "error",
+        mode: _DeltaMode = "error",
     ) -> DeltaOutput:
         return DeltaOutput(destination=destination, mode=mode)
 
@@ -90,6 +94,6 @@ class Output:
     def iceberg(
         destination: Destination,
         *,
-        mode: Literal["append", "overwrite"] = "append",
+        mode: _IcebergMode = "append",
     ) -> IcebergOutput:
         return IcebergOutput(destination=destination, mode=mode)

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import ClassVar
 
 import polars as pl
@@ -11,16 +11,12 @@ import polars as pl
 from .output import OutputSpec
 
 
-@dataclass(frozen=True, init=False)
+@dataclass(frozen=True, slots=True)
 class Input:
     """An immutable binding from a transform argument to an upstream node."""
 
     node_id: str
-    schema: pl.Schema
-
-    def __init__(self, node_id: str, *, schema: pl.Schema) -> None:
-        object.__setattr__(self, "node_id", node_id)
-        object.__setattr__(self, "schema", schema)
+    schema: pl.Schema = field(kw_only=True)
 
 
 class SourceModel:
