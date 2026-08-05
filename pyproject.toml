@@ -19,6 +19,7 @@ delta = [
     "deltalake>=1.6.2",
 ]
 iceberg = [
+    "polars>=1.43.1",
     "pyiceberg[pyarrow,sql-sqlite]>=0.11.1",
 ]
 
