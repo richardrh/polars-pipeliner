@@ -29,7 +29,8 @@ def test_output_factories_return_immutable_typed_specs() -> None:
         Output.ipc("a.ipc"),
         Output.ndjson("a.ndjson"),
         Output.delta("table"),
-        Output.iceberg("table"),
+        Output.delta_upsert("table", keys=("id",)),
+        Output.iceberg("namespace.table", catalog="production"),
     )
 
     assert [type(spec).__name__ for spec in specs] == [
@@ -38,10 +39,21 @@ def test_output_factories_return_immutable_typed_specs() -> None:
         "IpcOutput",
         "NdjsonOutput",
         "DeltaOutput",
+        "DeltaUpsertOutput",
         "IcebergOutput",
     ]
     with pytest.raises(FrozenInstanceError):
         cast(Any, specs[0]).destination = "other"
+
+    options = {"region": "us-east-1"}
+    remote = Output.parquet("s3://bucket/a.parquet", storage_options=options)
+    options["region"] = "changed"
+    assert remote.storage_options == {"region": "us-east-1"}
+    with pytest.raises(TypeError):
+        cast(Any, remote.storage_options)["region"] = "changed"
+    iceberg = Output.iceberg("analytics.orders", catalog="production")
+    assert iceberg.table == "analytics.orders"
+    assert iceberg.catalog == "production"
 
 
 def test_public_model_classes_use_ordinary_instance_methods() -> None:

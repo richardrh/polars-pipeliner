@@ -14,7 +14,7 @@ import polars as pl
 
 from .errors import DiscoveryError, QueryError, QueryValidationError
 from .model import MartModel, Model, SourceModel, _declared_inputs
-from .output import OutputSpec
+from .output import DeltaUpsertOutput, OutputSpec
 
 MODEL_DIRECTORIES = ("sources", "staging", "intermediate", "marts")
 
@@ -117,8 +117,19 @@ def _validate_model_class(
     if tier == "marts":
         if not issubclass(model, MartModel):
             raise DiscoveryError.invalid_placement(node_id, path, "MartModel", "marts")
-        if not isinstance(model.__dict__.get("output"), OutputSpec):
+        output = model.__dict__.get("output")
+        if not isinstance(output, OutputSpec):
             raise DiscoveryError.missing_definition(node_id, path, "output declaration")
+        if isinstance(output, DeltaUpsertOutput):
+            missing_keys = [
+                key for key in output.keys if key not in model.output_schema
+            ]
+            if missing_keys:
+                raise DiscoveryError.invalid_output(
+                    node_id,
+                    path,
+                    f"Delta upsert key(s) missing from output_schema: {missing_keys!r}",
+                )
     elif issubclass(model, (SourceModel, MartModel)):
         raise DiscoveryError.invalid_placement(
             node_id, path, model.__name__, "staging or intermediate"

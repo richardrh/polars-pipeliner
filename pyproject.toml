@@ -14,6 +14,14 @@ dependencies = [
 [project.scripts]
 polars-pipeliner = "polars_pipeliner.cli:main"
 
+[project.optional-dependencies]
+delta = [
+    "deltalake>=1.6.2",
+]
+iceberg = [
+    "pyiceberg[pyarrow,sql-sqlite]>=0.11.1",
+]
+
 [build-system]
 requires = ["uv_build>=0.11.6,<0.12.0"]
 build-backend = "uv_build"
@@ -23,6 +31,7 @@ module-name = "polars_pipeliner"
 
 [dependency-groups]
 dev = [
+    "boto3>=1.40",
     "hypothesis>=6.0",
     "mypy>=2.3.0",
     "pytest>=9.1.1",

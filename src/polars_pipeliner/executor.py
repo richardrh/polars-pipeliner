@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib.util
 import time
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -24,12 +25,36 @@ from .model import MartModel, SourceModel, _declared_inputs
 from .output import (
     CsvOutput,
     DeltaOutput,
+    DeltaUpsertOutput,
+    DestinationOutput,
     IcebergOutput,
     IpcOutput,
     NdjsonOutput,
     OutputSpec,
     ParquetOutput,
+    StorageOutput,
 )
+
+_ICEBERG_STORAGE_OPTION_NAMES = {
+    "s3.endpoint": "aws_endpoint_url",
+    "s3.access-key-id": "aws_access_key_id",
+    "s3.secret-access-key": "aws_secret_access_key",
+    "s3.session-token": "aws_session_token",
+    "s3.region": "aws_region",
+    "s3.proxy-uri": "proxy_url",
+    "s3.connect-timeout": "connect_timeout",
+    "s3.request-timeout": "timeout",
+    "s3.force-virtual-addressing": "aws_virtual_hosted_style_request",
+    "adls.account-name": "azure_storage_account_name",
+    "adls.account-key": "azure_storage_account_key",
+    "adls.sas-token": "azure_storage_sas_key",
+    "adls.tenant-id": "azure_storage_tenant_id",
+    "adls.client-id": "azure_storage_client_id",
+    "adls.client-secret": "azure_storage_client_secret",
+    "adls.account-host": "azure_storage_authority_host",
+    "adls.token": "azure_storage_token",
+    "gcs.oauth2.token": "bearer_token",
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -108,7 +133,7 @@ def build_models(
     return BuildResult(MappingProxyType(frames), MappingProxyType(schemas))
 
 
-def _destination(spec: OutputSpec, root: Path) -> str | Path:
+def _destination(spec: DestinationOutput, root: Path) -> str | Path:
     value = spec.destination
     if isinstance(value, Path):
         return value if value.is_absolute() else root / value
@@ -130,6 +155,29 @@ def _manifest_destination(destination: str | Path) -> str | Path:
     )
 
 
+def _storage_options(spec: StorageOutput) -> dict[str, str] | None:
+    return dict(spec.storage_options) if spec.storage_options is not None else None
+
+
+def _output_secrets(spec: OutputSpec) -> tuple[str, ...]:
+    if isinstance(spec, StorageOutput) and spec.storage_options is not None:
+        return tuple(spec.storage_options.values())
+    return ()
+
+
+def _iceberg_storage_options(properties: Mapping[str, str]) -> dict[str, str] | None:
+    options = {
+        translated: value
+        for key, value in properties.items()
+        if (
+            translated := _ICEBERG_STORAGE_OPTION_NAMES.get(
+                key, key if "." not in key else ""
+            )
+        )
+    }
+    return options or None
+
+
 def _make_parent(destination: str | Path) -> None:
     if isinstance(destination, Path):
         destination.parent.mkdir(parents=True, exist_ok=True)
@@ -141,24 +189,108 @@ def _lazy_sink(
     _make_parent(destination)
     if isinstance(spec, ParquetOutput):
         result = frame.sink_parquet(
-            destination, compression=spec.compression, lazy=True
+            destination,
+            compression=spec.compression,
+            storage_options=_storage_options(spec),
+            lazy=True,
         )
     elif isinstance(spec, CsvOutput):
         result = frame.sink_csv(
             destination,
             separator=spec.separator,
             include_header=spec.include_header,
+            storage_options=_storage_options(spec),
             lazy=True,
         )
     elif isinstance(spec, IpcOutput):
-        result = frame.sink_ipc(destination, compression=spec.compression, lazy=True)
+        result = frame.sink_ipc(
+            destination,
+            compression=spec.compression,
+            storage_options=_storage_options(spec),
+            lazy=True,
+        )
     elif isinstance(spec, NdjsonOutput):
-        result = frame.sink_ndjson(destination, lazy=True)
+        result = frame.sink_ndjson(
+            destination,
+            storage_options=_storage_options(spec),
+            lazy=True,
+        )
     else:
         raise TypeError(f"{type(spec).__name__} is not a composable file output")
     if not isinstance(result, pl.LazyFrame):
         raise RuntimeError("installed Polars does not support lazy file sink plans")
     return result
+
+
+def _require_optional_dependency(module: str, extra: str, label: str) -> None:
+    if importlib.util.find_spec(module) is None:
+        raise RuntimeError(
+            f"{label} output requires optional dependencies; "
+            f"install 'polars-pipeliner[{extra}]'"
+        )
+
+
+def _delta_reference(alias: str, column: str) -> str:
+    return f'{alias}."{column.replace('"', '""')}"'
+
+
+def _write_delta(
+    frame: pl.LazyFrame,
+    spec: DeltaOutput | DeltaUpsertOutput,
+    destination: str | Path,
+) -> None:
+    _require_optional_dependency("deltalake", "delta", "Delta")
+    options = _storage_options(spec)
+    if isinstance(spec, DeltaOutput):
+        frame.sink_delta(
+            destination,
+            mode=spec.mode,
+            storage_options=options,
+        )
+        return
+    source_alias = "source"
+    target_alias = "target"
+    predicate = " AND ".join(
+        f"{_delta_reference(source_alias, key)} = {_delta_reference(target_alias, key)}"
+        for key in spec.keys
+    )
+    merger = frame.sink_delta(
+        destination,
+        mode="merge",
+        storage_options=options,
+        delta_merge_options={
+            "predicate": predicate,
+            "source_alias": source_alias,
+            "target_alias": target_alias,
+        },
+    )
+    if merger is None:
+        raise RuntimeError("installed Polars did not return a Delta table merger")
+    (merger.when_matched_update_all().when_not_matched_insert_all().execute())
+
+
+def _write_iceberg(frame: pl.LazyFrame, spec: IcebergOutput) -> None:
+    _require_optional_dependency("pyiceberg", "iceberg", "Iceberg")
+    from pyiceberg.catalog import load_catalog
+
+    try:
+        catalog = load_catalog(spec.catalog)
+    except Exception:
+        raise RuntimeError(f"Could not load Iceberg catalog {spec.catalog!r}") from None
+    try:
+        table = catalog.load_table(spec.table)
+    except Exception:
+        raise RuntimeError(
+            f"Could not load Iceberg table {spec.table!r} from catalog {spec.catalog!r}"
+        ) from None
+    try:
+        frame.sink_iceberg(
+            table,
+            mode=spec.mode,
+            storage_options=_iceberg_storage_options(catalog.properties),
+        )
+    except Exception as error:
+        raise redact_exception(error, catalog.properties.values()) from None
 
 
 def run_models(
@@ -180,18 +312,31 @@ def run_models(
         model = cast(type[MartModel], node.model)
         spec = model.output
         try:
-            destination = _destination(spec, root)
-            manifest[node_id] = _manifest_destination(destination)
-            if isinstance(spec, (ParquetOutput, CsvOutput, IpcOutput, NdjsonOutput)):
-                _make_parent(destination)
-                file_outputs.append((node_id, destination, built.frames[node_id], spec))
+            if isinstance(spec, IcebergOutput):
+                target = spec.table
+                manifest[node_id] = f"{spec.catalog}:{spec.table}"
+                direct.append((node_id, built.frames[node_id], spec, target))
+            elif isinstance(spec, DestinationOutput):
+                destination = _destination(spec, root)
+                manifest[node_id] = _manifest_destination(destination)
+                if isinstance(
+                    spec, (ParquetOutput, CsvOutput, IpcOutput, NdjsonOutput)
+                ):
+                    _make_parent(destination)
+                    file_outputs.append(
+                        (node_id, destination, built.frames[node_id], spec)
+                    )
+                else:
+                    direct.append((node_id, built.frames[node_id], spec, destination))
             else:
-                direct.append((node_id, built.frames[node_id], spec, destination))
+                manifest[node_id] = "output"
+                direct.append((node_id, built.frames[node_id], spec, "output"))
         except Exception as error:
             destination = manifest.get(node_id, "output")
+            safe_error = redact_exception(error, _output_secrets(spec))
             raise QueryExecutionError.output_failed(
-                node_id, str(destination), error
-            ) from redact_exception(error)
+                node_id, str(destination), safe_error
+            ) from safe_error
     if file_outputs:
         try:
             pl.collect_all(
@@ -201,33 +346,40 @@ def run_models(
                 ]
             )
         except Exception as error:
+            secrets = (
+                secret
+                for _, _, _, spec in file_outputs
+                for secret in _output_secrets(spec)
+            )
+            safe_error = redact_exception(error, secrets)
             raise QueryExecutionError.grouped_outputs_failed(
                 [
                     (node_id, str(destination))
                     for node_id, destination, _, _ in file_outputs
                 ],
-                error,
-            ) from redact_exception(error)
+                safe_error,
+            ) from safe_error
         if events is not None:
             for node_id, destination, _, _ in file_outputs:
                 events.emit("output_written", node_id=node_id, path=destination)
     for node_id, direct_frame, spec, destination in direct:
         try:
-            _make_parent(destination)
-            if isinstance(spec, DeltaOutput):
-                direct_frame.sink_delta(
-                    destination, mode=spec.mode
-                )  # direct, non-composable API
+            if isinstance(spec, (DeltaOutput, DeltaUpsertOutput)):
+                _make_parent(destination)
+                _write_delta(direct_frame, spec, destination)
             elif isinstance(spec, IcebergOutput):
-                direct_frame.sink_iceberg(
-                    destination, mode=spec.mode
-                )  # direct, non-composable API
+                _write_iceberg(direct_frame, spec)
             else:
                 raise TypeError(f"{type(spec).__name__} is not a supported output")
             if events is not None:
-                events.emit("output_written", node_id=node_id, path=destination)
+                events.emit(
+                    "output_written",
+                    node_id=node_id,
+                    path=manifest[node_id],
+                )
         except Exception as error:
+            safe_error = redact_exception(error, _output_secrets(spec))
             raise QueryExecutionError.output_failed(
-                node_id, str(manifest[node_id]), error
-            ) from redact_exception(error)
+                node_id, str(manifest[node_id]), safe_error
+            ) from safe_error
     return MappingProxyType(manifest)
