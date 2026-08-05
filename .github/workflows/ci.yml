@@ -39,7 +39,7 @@ jobs:
         run: uv lock --check
 
       - name: Sync locked environment
-        run: uv sync --frozen --all-groups --python "${PYTHON_VERSION}"
+        run: uv sync --frozen --all-extras --all-groups --python "${PYTHON_VERSION}"
 
       - name: Run tests
         run: uv run --frozen pytest
@@ -156,7 +156,7 @@ jobs:
       - name: Install project, tests, and matrix Polars without changing lockfile
         run: |
           uv pip install --python "${VENV_PATH}/bin/python" \
-            -e . \
+            -e ".[delta,iceberg]" \
             "${{ matrix.polars-spec }}" \
             "hypothesis>=6.0" \
             "pytest>=9.1.1"
@@ -168,3 +168,56 @@ jobs:
       - name: Run full test suite
         run: |
           "${VENV_PATH}/bin/python" -m pytest
+
+  object-store:
+    name: S3 output integration
+    runs-on: ubuntu-latest
+    env:
+      POLARS_PIPELINER_S3_ENDPOINT: http://127.0.0.1:9000
+      AWS_ACCESS_KEY_ID: test-access-key
+      AWS_SECRET_ACCESS_KEY: test-secret-key
+      AWS_DEFAULT_REGION: us-east-1
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: ${{ env.UV_VERSION }}
+          python-version: ${{ env.PYTHON_VERSION }}
+          enable-cache: true
+          cache-suffix: py313-object-store
+          prune-cache: true
+
+      - name: Install Python ${{ env.PYTHON_VERSION }}
+        run: uv python install "${PYTHON_VERSION}"
+
+      - name: Start MinIO
+        run: |
+          docker run --detach --rm \
+            --name polars-pipeliner-minio \
+            --publish 9000:9000 \
+            --env MINIO_ROOT_USER="${AWS_ACCESS_KEY_ID}" \
+            --env MINIO_ROOT_PASSWORD="${AWS_SECRET_ACCESS_KEY}" \
+            minio/minio@sha256:a1a8bd4ac40ad7881a245bab97323e18f971e4d4cba2c2007ec1bedd21cbaba2 \
+            server /data
+          for attempt in {1..30}; do
+            if curl --fail --silent \
+              http://127.0.0.1:9000/minio/health/live > /dev/null; then
+              exit 0
+            fi
+            sleep 1
+          done
+          docker logs polars-pipeliner-minio
+          exit 1
+
+      - name: Sync locked environment with storage extras
+        run: uv sync --frozen --all-extras --all-groups --python "${PYTHON_VERSION}"
+
+      - name: Run S3 integration tests
+        run: uv run --frozen pytest tests/test_s3_outputs.py
+
+      - name: Show MinIO logs after failure
+        if: failure()
+        run: docker logs polars-pipeliner-minio

@@ -9,6 +9,7 @@ from typing import cast
 import polars as pl
 import pytest
 
+import polars_pipeliner.executor as executor
 from polars_pipeliner import QueryBuildError, QueryExecutionError, discover
 
 
@@ -242,6 +243,74 @@ def test_uri_manifest_and_errors_are_redacted(
         assert secret not in message
 
 
+def test_object_store_options_are_forwarded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    uri = "s3://bucket/orders.parquet"
+    options = {"region": "us-east-1", "endpoint_url": "http://localhost:9000"}
+    write(tmp_path, "sources/orders.py", source())
+    write(
+        tmp_path,
+        "marts/orders.py",
+        mart(
+            "Orders",
+            f"Output.parquet({uri!r}, storage_options={options!r})",
+        ),
+    )
+    calls: list[tuple[str | Path, dict[str, object]]] = []
+
+    def sink(
+        self: pl.LazyFrame, destination: str | Path, **kwargs: object
+    ) -> pl.LazyFrame:
+        calls.append((destination, kwargs))
+        return self
+
+    monkeypatch.setattr(pl.LazyFrame, "sink_parquet", sink)
+
+    assert discover(tmp_path).run() == {"marts.orders": uri}
+    assert calls == [
+        (
+            uri,
+            {
+                "compression": "zstd",
+                "storage_options": options,
+                "lazy": True,
+            },
+        )
+    ]
+
+
+def test_object_store_options_are_redacted_from_failures(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    secret = "never-log-this-secret"
+    write(tmp_path, "sources/orders.py", source())
+    write(
+        tmp_path,
+        "marts/orders.py",
+        mart(
+            "Orders",
+            "Output.parquet("
+            "'s3://bucket/orders.parquet', "
+            f"storage_options={{'secret_access_key': {secret!r}}})",
+        ),
+    )
+
+    def broken_sink(
+        self: pl.LazyFrame, destination: str | Path, **kwargs: object
+    ) -> pl.LazyFrame:
+        raise OSError(f"credential {secret} failed")
+
+    monkeypatch.setattr(pl.LazyFrame, "sink_parquet", broken_sink)
+
+    with pytest.raises(QueryExecutionError) as raised:
+        discover(tmp_path).run()
+
+    message = str(raised.value) + str(raised.value.__cause__)
+    assert secret not in message
+    assert "***" in message
+
+
 def test_grouped_output_failure_identifies_all_affected_destinations(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -294,24 +363,57 @@ def test_uri_manifest_redacts_credentials_query_and_fragment(
     assert discover(tmp_path).run() == {"marts.orders": "s3://bucket/orders"}
 
 
-@pytest.mark.parametrize("factory", ["delta", "iceberg"])
-def test_relative_optional_output_destinations_resolve_from_project_root(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, factory: str
+def test_relative_delta_destination_resolves_from_project_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     write(tmp_path, "sources/orders.py", source())
     write(
         tmp_path,
         "marts/orders.py",
-        mart("Orders", f"Output.{factory}('relative-output')"),
+        mart("Orders", "Output.delta('relative-output')"),
     )
     destinations: list[str | Path] = []
 
     def sink(self: pl.LazyFrame, destination: str | Path, **kwargs: object) -> None:
         destinations.append(destination)
 
-    monkeypatch.setattr(pl.LazyFrame, f"sink_{factory}", sink, raising=False)
+    monkeypatch.setattr(pl.LazyFrame, "sink_delta", sink, raising=False)
     assert discover(tmp_path).run() == {"marts.orders": tmp_path / "relative-output"}
     assert destinations == [tmp_path / "relative-output"]
+
+
+@pytest.mark.parametrize(
+    ("output", "module", "extra"),
+    [
+        ("Output.delta('table')", "deltalake", "delta"),
+        (
+            "Output.iceberg('analytics.orders', catalog='production')",
+            "pyiceberg",
+            "iceberg",
+        ),
+    ],
+)
+def test_missing_output_extra_has_an_actionable_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    output: str,
+    module: str,
+    extra: str,
+) -> None:
+    write(tmp_path, "sources/orders.py", source())
+    write(tmp_path, "marts/orders.py", mart("Orders", output))
+    real_find_spec = executor.importlib.util.find_spec
+    monkeypatch.setattr(
+        executor.importlib.util,
+        "find_spec",
+        lambda name: None if name == module else real_find_spec(name),
+    )
+
+    with pytest.raises(
+        QueryExecutionError,
+        match=rf"install 'polars-pipeliner\[{extra}\]'",
+    ):
+        discover(tmp_path).run()
 
 
 def test_second_direct_output_failure_is_attributed_to_its_mart(
@@ -339,10 +441,14 @@ def test_unsupported_output_spec_fails_without_success(tmp_path: Path) -> None:
     write(
         tmp_path,
         "marts/orders.py",
-        mart("Orders", "OutputSpec(destination='unsupported')").replace(
+        mart("Orders", "UnsupportedOutput(destination='unsupported')").replace(
             "from polars_pipeliner import Input, MartModel, Output",
+            "from dataclasses import dataclass\n"
             "from polars_pipeliner import Input, MartModel\n"
-            "from polars_pipeliner.output import OutputSpec",
+            "from polars_pipeliner.output import OutputSpec\n"
+            "@dataclass(frozen=True, kw_only=True)\n"
+            "class UnsupportedOutput(OutputSpec):\n"
+            "    destination: str",
         ),
     )
 

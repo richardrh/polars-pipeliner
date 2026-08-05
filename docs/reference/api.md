@@ -73,23 +73,69 @@ See [Model types](/concepts/models) for complete examples.
 
 Use `Output` factory methods in a `MartModel`.
 
-| Factory | Options |
-| --- | --- |
-| `Output.parquet(destination, compression="zstd")` | `snappy`, `gzip`, `lzo`, `brotli`, `lz4`, `zstd` |
-| `Output.csv(destination, separator=",", include_header=True)` | Separator and header |
-| `Output.ipc(destination, compression="uncompressed")` | `uncompressed`, `lz4`, `zstd` |
-| `Output.ndjson(destination)` | No additional options |
-| `Output.delta(destination, mode="error")` | `error`, `append`, `overwrite`, `ignore` |
-| `Output.iceberg(destination, mode="append")` | `append`, `overwrite` |
+| Factory | Target | Options |
+| --- | --- | --- |
+| `Output.parquet()` | Path or storage URI | `compression`, `storage_options` |
+| `Output.csv()` | Path or storage URI | `separator`, `include_header`, `storage_options` |
+| `Output.ipc()` | Path or storage URI | `compression`, `storage_options` |
+| `Output.ndjson()` | Path or storage URI | `storage_options` |
+| `Output.delta()` | Delta path or URI | `mode`, `storage_options` |
+| `Output.delta_upsert()` | Existing Delta path or URI | `keys`, `storage_options` |
+| `Output.iceberg()` | Catalog table identifier | `catalog`, `mode` |
+
+### File output
 
 ```python
 output = Output.parquet(
-    "target/orders.parquet",
+    "s3://analytics-bucket/marts/orders.parquet",
     compression="zstd",
 )
 ```
 
-Output specifications are immutable.
+File output modes overwrite the destination.
+
+### Delta output
+
+```python
+output = Output.delta(
+    "s3://analytics-bucket/tables/orders",
+    mode="append",
+)
+```
+
+Valid modes are `error`, `append`, `overwrite`, and `ignore`.
+
+Use `delta_upsert()` for update-all and insert-all semantics:
+
+```python
+output = Output.delta_upsert(
+    "s3://analytics-bucket/tables/orders",
+    keys=("order_id",),
+)
+```
+
+### Iceberg output
+
+```python
+output = Output.iceberg(
+    "analytics.orders",
+    catalog="production",
+    mode="append",
+)
+```
+
+The first argument is a table identifier. It is not a path. The named
+PyIceberg catalog is loaded only during `project.run()`.
+
+### Storage options
+
+`storage_options` accepts a mapping of backend-specific strings. The mapping is
+copied and made immutable. Its values are redacted from execution failures and
+are not included in events or manifests.
+
+Output specifications are immutable. See
+[Sources and outputs](/concepts/io) for installation, credentials, S3, Delta,
+and Iceberg examples.
 
 ## `BuildResult`
 
@@ -116,7 +162,6 @@ schema = result.schemas["staging.orders"]
 ```python
 project.node_ids -> tuple[str, ...]
 ```
-
 Returns discovered node IDs in stable discovery order.
 
 ### `resolve()`

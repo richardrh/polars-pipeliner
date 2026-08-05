@@ -17,6 +17,29 @@ uv add polars-pipeliner
 
 Polars Pipeliner requires Python 3.13 or newer.
 
+## Install optional table formats
+
+Install Delta Lake support when a mart writes Delta tables:
+
+```bash
+pip install "polars-pipeliner[delta]"
+```
+
+Install Apache Iceberg support when a mart writes catalog-managed Iceberg
+tables:
+
+```bash
+pip install "polars-pipeliner[iceberg]"
+```
+
+Install both extras:
+
+```bash
+pip install "polars-pipeliner[delta,iceberg]"
+```
+
+File outputs, including Parquet on S3, do not require these extras.
+
 ## Create the model folders
 
 Create a project directory and drop each model into the folder that describes
@@ -33,7 +56,6 @@ my-pipeline/
 └── marts/
     └── values.py
 ```
-
 The file path becomes the node ID. For example,
 `staging/positive_values.py` becomes `staging.positive_values`.
 

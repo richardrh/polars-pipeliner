@@ -31,9 +31,12 @@ def redact_text(text: str) -> str:
     return _redact_uris(text)
 
 
-def redact_exception(error: Exception) -> Exception:
-    """Return an equivalent exception whose text does not expose URI secrets."""
+def redact_exception(error: Exception, secrets: Iterable[str] = ()) -> Exception:
+    """Return an equivalent exception whose text does not expose secrets."""
     detail = _redact_uris(str(error))
+    for secret in secrets:
+        if secret:
+            detail = detail.replace(secret, "***")
     if detail == str(error):
         return error
     try:
@@ -184,6 +187,10 @@ class DiscoveryError(QueryError):
         return cls(
             f"Model {node_id} ({path}) must define ordinary instance method {method}"
         )
+
+    @classmethod
+    def invalid_output(cls, node_id: str, path: Path, detail: str) -> DiscoveryError:
+        return cls(f"Model {node_id} ({path}) has an invalid output: {detail}")
 
 
 class QueryValidationError(QueryError):
