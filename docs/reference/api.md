@@ -1,122 +1,244 @@
 # Public API
 
-Import the public API from `polars_pipeliner`:
+Import public symbols from `polars_pipeliner`.
 
 ```python
 from polars_pipeliner import (
+    BuildResult,
+    ConfigError,
+    DiscoveryError,
     Input,
     MartModel,
     Model,
+    ModelValidationError,
     Output,
     Project,
     ProjectConfig,
+    QueryBuildError,
+    QueryError,
+    QueryExecutionError,
+    QueryValidationError,
     SourceModel,
     discover,
     load_config,
 )
 ```
 
-## Model contracts
+## Quick reference
 
-### Source model
+| Symbol | Purpose |
+| --- | --- |
+| `Input` | Declare an upstream dependency |
+| `SourceModel` | Introduce a lazy data source |
+| `Model` | Define a reusable transformation |
+| `MartModel` | Define a materialized output |
+| `Output` | Create a typed output specification |
+| `BuildResult` | Hold built frames and resolved schemas |
+| `Project` | Build, validate, and run a discovered project |
+| `discover()` | Discover a project from a root directory |
+| `ProjectConfig` | Configure logging |
+| `load_config()` | Load TOML configuration |
 
-`SourceModel` belongs in `sources/`, declares `output_schema: pl.Schema`, has
-no `Input` attributes, and implements `source(self) -> pl.LazyFrame`.
+## `Input`
 
 ```python
-import polars as pl
-
-from polars_pipeliner import SourceModel
-
-
-ORDERS_SCHEMA = pl.Schema({"order_id": pl.Int64, "customer_id": pl.Int64})
-
-
-class Orders(SourceModel):
-    output_schema = ORDERS_SCHEMA
-
-    def source(self) -> pl.LazyFrame:
-        return pl.LazyFrame({"order_id": [], "customer_id": []}, schema=ORDERS_SCHEMA)
+Input(node_id: str, *, schema: pl.Schema)
 ```
 
-### Transform model
-
-`Model` belongs in `staging/` or `intermediate/`, declares
-`output_schema: pl.Schema`, and uses a direct `Input`-valued class attribute
-for each upstream frame. Each attribute name must exactly match a normal
-`transform(self, ...named LazyFrames...) -> pl.LazyFrame` parameter. For
-example, `orders = Input("sources.orders", schema=ORDERS_SCHEMA)` declares the
-`orders` argument. Transform models may declare zero, one, or multiple inputs.
+`Input` is an immutable upstream binding.
 
 ```python
-import polars as pl
+orders = Input("sources.orders", schema=ORDER_SCHEMA)
+```
 
-from polars_pipeliner import Input, Model
+| Argument | Meaning |
+| --- | --- |
+| `node_id` | Upstream model ID |
+| `schema` | Exact schema expected from that model |
 
+The class attribute name must match the corresponding `transform()` parameter.
+Mapping-style `inputs = {...}` declarations are not supported.
 
-ORDERS_SCHEMA = pl.Schema({"order_id": pl.Int64, "customer_id": pl.Int64})
-CUSTOMERS_SCHEMA = pl.Schema({"customer_id": pl.Int64, "name": pl.String})
-ENRICHED_ORDERS_SCHEMA = pl.Schema(
-    {"order_id": pl.Int64, "customer_id": pl.Int64, "name": pl.String}
+## Model classes
+
+| Class | Folder | Required method | Additional declarations |
+| --- | --- | --- | --- |
+| `SourceModel` | `sources/` | `source()` | `output_schema` |
+| `Model` | `staging/`, `intermediate/` | `transform()` | Inputs and `output_schema` |
+| `MartModel` | `marts/` | `transform()` | Inputs, `output_schema`, and `output` |
+
+See [Model types](/concepts/models) for complete examples.
+
+## `Output`
+
+Use `Output` factory methods in a `MartModel`.
+
+| Factory | Options |
+| --- | --- |
+| `Output.parquet(destination, compression="zstd")` | `snappy`, `gzip`, `lzo`, `brotli`, `lz4`, `zstd` |
+| `Output.csv(destination, separator=",", include_header=True)` | Separator and header |
+| `Output.ipc(destination, compression="uncompressed")` | `uncompressed`, `lz4`, `zstd` |
+| `Output.ndjson(destination)` | No additional options |
+| `Output.delta(destination, mode="error")` | `error`, `append`, `overwrite`, `ignore` |
+| `Output.iceberg(destination, mode="append")` | `append`, `overwrite` |
+
+```python
+output = Output.parquet(
+    "target/orders.parquet",
+    compression="zstd",
 )
-
-
-class EnrichedOrders(Model):
-    orders = Input("sources.orders", schema=ORDERS_SCHEMA)
-    customers = Input("staging.customers", schema=CUSTOMERS_SCHEMA)
-    output_schema = ENRICHED_ORDERS_SCHEMA
-
-    def transform(self, orders: pl.LazyFrame, customers: pl.LazyFrame) -> pl.LazyFrame:
-        return orders.join(customers, on="customer_id")
 ```
 
-### Mart model
+Output specifications are immutable.
 
-`MartModel` belongs in `marts/`, follows the transform model contract, and also
-declares `output: OutputSpec`. Use `Output.parquet`,
-`Output.csv`, `Output.ipc`, `Output.ndjson`, `Output.delta`, or
-`Output.iceberg` to create it. Parquet compression accepts `snappy`, `gzip`,
-`lzo`, `brotli`, `lz4`, or `zstd`; IPC compression accepts `uncompressed`,
-`lz4`, or `zstd`; Delta modes are `error`, `append`, `overwrite`, or `ignore`;
-and Iceberg modes are `append` or `overwrite`.
+## `BuildResult`
+
+`Project.build()` returns a `BuildResult`.
+
+| Attribute | Type | Contents |
+| --- | --- | --- |
+| `frames` | `Mapping[str, pl.LazyFrame]` | Built lazy plans by node ID |
+| `schemas` | `Mapping[str, pl.Schema]` | Resolved schemas by node ID |
+
+Both mappings are immutable.
 
 ```python
-import polars as pl
+result = project.build()
 
-from polars_pipeliner import Input, MartModel, Output
-
-
-REVENUE_SCHEMA = pl.Schema({"region": pl.String, "revenue": pl.Float64})
-
-
-class RevenueByRegion(MartModel):
-    revenue = Input("intermediate.revenue", schema=REVENUE_SCHEMA)
-    output_schema = REVENUE_SCHEMA
-    output = Output.parquet("target/revenue_by_region.parquet")
-
-    def transform(self, revenue: pl.LazyFrame) -> pl.LazyFrame:
-        return revenue
+orders = result.frames["staging.orders"]
+schema = result.schemas["staging.orders"]
 ```
 
-`Input(node_id, schema=...)` creates an immutable upstream binding. `schema` is
-keyword-only. The old `inputs = {"orders": Input(...)}` mapping declaration is
-not supported.
+## `Project`
 
-`discover(query_root, *, config=None, config_path=None)` returns a `Project`.
-Passing both configuration arguments is an error. `Project.resolve()` returns
-the topological node IDs, `Project.build()` returns validated lazy frames, and
-`Project.validate()` returns an immutable node-to-resolved-schema mapping without
-row collection or mart writes. It constructs model plans and calls
-`collect_schema()`, which may read file metadata or make network requests; it
-cannot prove row values, uniqueness, ranges, null constraints, or business
-correctness. `Project.run()` takes no arguments and returns the materialized mart
-manifest.
+### `node_ids`
 
-Validation JSONL final events include a fail-fast summary with
-`models_found`, `models_verified`, `models_failed`, and `failed_models`; counts
-cover only schemas verified before the first failure.
+```python
+project.node_ids -> tuple[str, ...]
+```
 
-`ProjectConfig(log_level="WARNING")` and `load_config(path=None)` provide the
-configuration API. The public package also exports `ConfigError`, `DiscoveryError`,
-`ModelValidationError`, `QueryBuildError`, `QueryError`, `QueryExecutionError`,
-and `QueryValidationError`.
+Returns discovered node IDs in stable discovery order.
+
+### `resolve()`
+
+```python
+project.resolve() -> tuple[str, ...]
+```
+
+Returns node IDs in dependency-safe order.
+
+### `build()`
+
+```python
+project.build() -> BuildResult
+```
+
+Builds every lazy plan and resolves every schema. It does not write marts.
+
+### `validate()`
+
+```python
+project.validate() -> Mapping[str, pl.Schema]
+```
+
+Builds all plans and returns their resolved schemas without collecting rows or
+writing marts.
+
+### `run()`
+
+```python
+project.run() -> Mapping[str, str | Path]
+```
+
+Validates the graph, writes every mart, and returns an immutable manifest.
+
+```python
+manifest = project.run()
+destination = manifest["marts.orders"]
+```
+
+Relative output paths become absolute manifest paths because the project root
+is resolved during discovery.
+
+`Project.graph` is not part of the public API. Use `node_ids` and `resolve()`.
+
+## `discover()`
+
+```python
+discover(
+    query_root,
+    *,
+    config=None,
+    config_path=None,
+) -> Project
+```
+
+### Rules
+
+- `query_root` must be a directory.
+- `config` and `config_path` cannot both be supplied.
+- the project root is resolved to an absolute path;
+- model declarations are checked before a `Project` is returned.
+
+### Example
+
+```python
+project = discover(
+    "my-pipeline",
+    config_path="polars-pipeliner.toml",
+)
+```
+
+## Configuration API
+
+### `ProjectConfig`
+
+```python
+from pathlib import Path
+
+from polars_pipeliner import ProjectConfig
+
+
+config = ProjectConfig(
+    log_level="WARNING",
+    run_log_dir=Path("target/runs"),
+)
+```
+
+### `load_config()`
+
+```python
+from polars_pipeliner import load_config
+
+
+config = load_config("polars-pipeliner.toml")
+```
+
+Call `load_config()` without a path to return the default configuration.
+
+## Errors
+
+All package errors inherit from `QueryError`.
+
+| Error | Category |
+| --- | --- |
+| `ConfigError` | Invalid configuration |
+| `DiscoveryError` | Import or model declaration failure |
+| `QueryValidationError` | Dependency or declared-schema failure |
+| `QueryBuildError` | Lazy-plan construction failure |
+| `ModelValidationError` | Resolved output-schema failure |
+| `QueryExecutionError` | Mart output failure |
+
+## Validation summary
+
+The final command-line validation event contains:
+
+| Field | Meaning |
+| --- | --- |
+| `models_found` | Scoped model files discovered |
+| `models_verified` | Models verified before completion or failure |
+| `models_failed` | Models that failed |
+| `failed_models` | Failed node IDs |
+
+Validation is fail-fast. Counts include only models verified before the first
+failure.

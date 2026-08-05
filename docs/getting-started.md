@@ -1,141 +1,190 @@
 # Getting started
 
-The canonical `examples/customer-orders` project reads customers, products, and
-orders; joins them into order lines; and writes one customer-order mart.
+## Install from PyPI
 
-Install the distribution from a project that uses Python 3.13+:
+Install Polars Pipeliner from
+[PyPI](https://pypi.org/project/polars-pipeliner/):
+
+```bash
+pip install polars-pipeliner
+```
+
+Using `uv`:
 
 ```bash
 uv add polars-pipeliner
 ```
 
-From this repository, run the example exactly as shipped:
+Polars Pipeliner requires Python 3.13 or newer.
 
-```bash
-uv run python examples/customer-orders/run.py
+## Create the model folders
+
+Create a project directory and drop each model into the folder that describes
+its role:
+
+```text
+my-pipeline/
+├── sources/
+│   └── values.py
+├── staging/
+│   └── positive_values.py
+├── intermediate/
+│   └── doubled_values.py
+└── marts/
+    └── values.py
 ```
 
-The runner discovers the project root and runs all marts without targets:
+The file path becomes the node ID. For example,
+`staging/positive_values.py` becomes `staging.positive_values`.
+
+Each file defines one concrete model class.
+
+## `sources/`: load data
+
+Define:
+
+- an `output_schema`;
+- a `source()` method that returns a `LazyFrame`;
+- no upstream inputs.
+
+Drop the file into `sources/`.
 
 ```python
-from pathlib import Path
-
-from polars_pipeliner import discover
-
-root = Path(__file__).parent
-manifest = discover(root).run()
-print(manifest["marts.customer_orders"])
-```
-
-To resolve and validate every model schema without writing the mart, call
-`discover(root).validate()` or run:
-
-```bash
-uv run polars-pipeliner validate examples/customer-orders --config examples/customer-orders/polars-pipeliner.toml
-```
-
-The source in `sources/customers.py` declares the schema it supplies and returns
-a lazy scan:
-
-```python
-from pathlib import Path
-
+# sources/values.py
 import polars as pl
 
 from polars_pipeliner import SourceModel
 
 
-CUSTOMERS_SCHEMA = pl.Schema(
-    {
-        "customer_id": pl.Int64,
-        "customer_name": pl.String,
-        "segment": pl.String,
-    }
-)
+VALUE_SCHEMA = pl.Schema({"value": pl.Int64})
 
 
-class Customers(SourceModel):
-    output_schema = CUSTOMERS_SCHEMA
+class Values(SourceModel):
+    output_schema = VALUE_SCHEMA
 
     def source(self) -> pl.LazyFrame:
-        return pl.scan_csv(
-            Path(__file__).parents[1] / "seeds" / "customers.csv",
-            schema_overrides=CUSTOMERS_SCHEMA,
-        )
+        return pl.LazyFrame({"value": [1, 2, 3]}, schema=VALUE_SCHEMA)
 ```
 
-The mart in `marts/customer_orders.py` declares its two upstream edges and its
-output. Its normal `transform()` method receives the matching named plans:
+## `staging/`: clean source data
+
+Define:
+
+- each upstream dependency as an `Input`;
+- an `output_schema`;
+- a `transform()` method whose parameters match the `Input` attribute names.
+
+Drop the file into `staging/`.
 
 ```python
+# staging/positive_values.py
+import polars as pl
+
+from polars_pipeliner import Input, Model
+
+
+VALUE_SCHEMA = pl.Schema({"value": pl.Int64})
+
+
+class PositiveValues(Model):
+    values = Input("sources.values", schema=VALUE_SCHEMA)
+    output_schema = VALUE_SCHEMA
+
+    def transform(self, values: pl.LazyFrame) -> pl.LazyFrame:
+        return values.filter(pl.col("value") > 0)
+```
+
+## `intermediate/`: reuse transformations
+
+Define:
+
+- each upstream dependency as an `Input`;
+- an `output_schema`;
+- a `transform()` method;
+- no output destination.
+
+Drop the file into `intermediate/` when its result feeds another
+transformation.
+
+```python
+# intermediate/doubled_values.py
+import polars as pl
+
+from polars_pipeliner import Input, Model
+
+
+VALUE_SCHEMA = pl.Schema({"value": pl.Int64})
+
+
+class DoubledValues(Model):
+    values = Input("staging.positive_values", schema=VALUE_SCHEMA)
+    output_schema = VALUE_SCHEMA
+
+    def transform(self, values: pl.LazyFrame) -> pl.LazyFrame:
+        return values.with_columns(pl.col("value") * 2)
+```
+
+Intermediate models do not write output files.
+
+## `marts/`: write final outputs
+
+Define:
+
+- each upstream dependency as an `Input`;
+- an `output_schema`;
+- an `Output` specification;
+- a `transform()` method.
+
+Drop the file into `marts/`.
+
+```python
+# marts/values.py
 import polars as pl
 
 from polars_pipeliner import Input, MartModel, Output
 
 
-CUSTOMERS_SCHEMA = pl.Schema(
-    {
-        "customer_id": pl.Int64,
-        "customer_name": pl.String,
-        "segment": pl.String,
-    }
-)
-ORDER_LINES_SCHEMA = pl.Schema(
-    {
-        "order_id": pl.Int64,
-        "customer_id": pl.Int64,
-        "product_id": pl.Int64,
-        "order_date": pl.Date,
-        "quantity": pl.Int64,
-        "product_name": pl.String,
-        "category": pl.String,
-        "unit_price": pl.Float64,
-        "line_total": pl.Float64,
-    }
-)
-CUSTOMER_ORDERS_SCHEMA = pl.Schema(
-    {
-        "customer_id": pl.Int64,
-        "customer_name": pl.String,
-        "segment": pl.String,
-        "order_count": pl.UInt32,
-        "units_ordered": pl.Int64,
-        "total_spend": pl.Float64,
-    }
-)
+VALUE_SCHEMA = pl.Schema({"value": pl.Int64})
 
 
-class CustomerOrders(MartModel):
-    customers = Input("staging.customers", schema=CUSTOMERS_SCHEMA)
-    order_lines = Input("intermediate.order_lines", schema=ORDER_LINES_SCHEMA)
-    output_schema = CUSTOMER_ORDERS_SCHEMA
-    output = Output.parquet("target/customer_orders.parquet")
+class Values(MartModel):
+    values = Input("intermediate.doubled_values", schema=VALUE_SCHEMA)
+    output_schema = VALUE_SCHEMA
+    output = Output.parquet("target/values.parquet")
 
-    def transform(
-        self, customers: pl.LazyFrame, order_lines: pl.LazyFrame
-    ) -> pl.LazyFrame:
-        customer_totals = order_lines.group_by("customer_id").agg(
-            pl.len().alias("order_count"),
-            pl.col("quantity").sum().alias("units_ordered"),
-            pl.col("line_total").sum().alias("total_spend"),
-        )
-        return (
-            customers.join(customer_totals, on="customer_id", how="left")
-            .with_columns(
-                pl.col("order_count").fill_null(0),
-                pl.col("units_ordered").fill_null(0),
-                pl.col("total_spend").fill_null(0.0),
-            )
-            .select(
-                "customer_id",
-                "customer_name",
-                "segment",
-                "order_count",
-                "units_ordered",
-                "total_spend",
-            )
-            .sort("customer_id")
-        )
+    def transform(self, values: pl.LazyFrame) -> pl.LazyFrame:
+        return values
 ```
 
-See [Model types](concepts/models.md) for the placement and contract rules.
+The executor writes the returned lazy frame to the configured destination.
+
+## Validate the project
+
+Validate model declarations and schemas without writing the mart:
+
+```bash
+polars-pipeliner validate my-pipeline
+```
+
+## Run the project
+
+```python
+from polars_pipeliner import discover
+
+
+project = discover("my-pipeline")
+
+print(project.resolve())
+# ('sources.values', 'staging.positive_values',
+#  'intermediate.doubled_values', 'marts.values')
+
+manifest = project.run()
+print(manifest["marts.values"])
+```
+
+The mart is written to `my-pipeline/target/values.parquet`.
+
+## Next steps
+
+- See [Model types](/concepts/models) for placement and model contracts.
+- See [Python API](/reference/api) for the complete public interface.

@@ -1,13 +1,42 @@
 # Configuration
 
-Configuration is optional. `discover(root)` uses `ProjectConfig()` by default.
-To load a file explicitly, pass `config_path`; do not pass both `config` and
-`config_path`.
+Configuration is optional.
 
-The configuration filename is your choice. Its required table name is
-`polars-pipeliner`; `LOG_LEVEL` is required and `RUN_LOG_DIR` controls Python
-run and validation JSONL files (default: `target/runs`, relative to the project
-root):
+## Defaults
+
+Without a configuration file, `discover(root)` uses:
+
+| Setting | Default |
+| --- | --- |
+| Log level | `INFO` |
+| Run log directory | `target/runs` |
+
+```python
+from polars_pipeliner import discover
+
+
+project = discover("my-pipeline")
+```
+
+## Configure in Python
+
+```python
+from pathlib import Path
+
+from polars_pipeliner import ProjectConfig, discover
+
+
+config = ProjectConfig(
+    log_level="WARNING",
+    run_log_dir=Path("target/runs"),
+)
+
+project = discover("my-pipeline", config=config)
+```
+
+## Configure with TOML
+
+The filename is your choice. The table must be named `polars-pipeliner`.
 
 ```toml
 [polars-pipeliner]
@@ -15,15 +44,63 @@ LOG_LEVEL = "INFO"
 RUN_LOG_DIR = "target/runs"
 ```
 
-Accepted values are `DEBUG`, `INFO`, `WARNING`, `ERROR`, and `CRITICAL`.
-Unknown settings, a missing table or `LOG_LEVEL`, non-string settings, malformed
-files, and unreadable or absent explicit paths are errors. `project.run()` and
-`project.validate()` write one JSONL file per invocation; their CLI equivalents
-emit JSONL to stdout instead. The default is `INFO`: run and validation boundary
-events are always emitted, while per-node validation and output events respect
-`LOG_LEVEL`.
+Load the file through `discover()`:
 
 ```python
-project = discover(".", config_path="polars-pipeliner.toml")
-manifest = project.run()
+from polars_pipeliner import discover
+
+
+project = discover(
+    "my-pipeline",
+    config_path="polars-pipeliner.toml",
+)
 ```
+
+Do not pass both `config` and `config_path`.
+
+## Settings
+
+| TOML setting | Required in a file | Default |
+| --- | --- | --- |
+| `LOG_LEVEL` | Yes | `INFO` without a file |
+| `RUN_LOG_DIR` | No | `target/runs` |
+
+Relative run log directories are resolved from the project root.
+
+## Valid log levels
+
+- `DEBUG`
+- `INFO`
+- `WARNING`
+- `ERROR`
+- `CRITICAL`
+
+The default level is `INFO`.
+
+| Event category | Controlled by `LOG_LEVEL` |
+| --- | --- |
+| Run and validation boundaries | No; always emitted |
+| Per-node validation events | Yes |
+| Output events | Yes |
+
+## Invalid configuration
+
+Configuration loading fails for:
+
+- unknown settings;
+- a missing `[polars-pipeliner]` table;
+- a missing `LOG_LEVEL` in a selected TOML file;
+- non-string settings;
+- malformed TOML;
+- an unreadable selected path;
+- a selected path that does not exist.
+
+## Event destinations
+
+| Invocation | Destination |
+| --- | --- |
+| `project.validate()` | One JSONL run-log file |
+| `project.run()` | One JSONL run-log file |
+| Command-line validation | JSONL on standard output |
+
+JSON Lines (JSONL) stores one JSON object per line.
