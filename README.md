@@ -30,6 +30,9 @@ Input and output data schemas are checked, the pipeline errors if they fail.
 - Validate the execution plan up front
 - Python and CLI APIs
 
+## Documentation
+https://richardrh.github.io/polars-pipeliner/
+
 ## Example
 
 This mart consumes typed order lines, declares its result contract, and lets the
