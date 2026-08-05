@@ -5,11 +5,12 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-import boto3
 import polars as pl
 import pytest
 
 from polars_pipeliner import discover
+
+boto3 = pytest.importorskip("boto3")
 
 ENDPOINT = os.environ.get("POLARS_PIPELINER_S3_ENDPOINT")
 pytestmark = pytest.mark.skipif(
