@@ -29,7 +29,7 @@ export default defineConfig({
           { text: "Model types", link: "/concepts/models" },
           { text: "Schemas and validation", link: "/concepts/schemas" },
           {
-            text: "DAG discovery and execution",
+            text: "Discovery and execution",
             link: "/concepts/execution",
           },
           { text: "Sources and outputs", link: "/concepts/io" },
