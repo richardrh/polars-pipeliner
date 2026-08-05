@@ -32,7 +32,7 @@ from .output import (
 )
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class BuildResult:
     """Validated lazy plans for the complete discovered graph."""
 
@@ -222,6 +222,8 @@ def run_models(
                 direct_frame.sink_iceberg(
                     destination, mode=spec.mode
                 )  # direct, non-composable API
+            else:
+                raise TypeError(f"{type(spec).__name__} is not a supported output")
             if events is not None:
                 events.emit("output_written", node_id=node_id, path=destination)
         except Exception as error:

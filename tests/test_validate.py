@@ -275,3 +275,32 @@ def test_python_warning_summary_counts_hidden_model_events(tmp_path: Path) -> No
         "models_failed": 0,
         "failed_models": [],
     }
+
+
+def test_cli_discovery_failure_summary_identifies_failed_model(
+    tmp_path: Path,
+) -> None:
+    model_path = tmp_path / "sources/orders.py"
+    write(
+        tmp_path,
+        "sources/orders.py",
+        """import polars as pl
+from polars_pipeliner import SourceModel
+
+class Orders(SourceModel):
+    def source(self) -> pl.LazyFrame:
+        return pl.LazyFrame({"value": [1]})
+""",
+    )
+
+    failure = events_from_cli(cli(tmp_path))
+
+    assert failure["event"] == "validation_failed"
+    assert failure["node_id"] == "sources.orders"
+    assert failure["path"] == str(model_path)
+    assert failure["summary"] == {
+        "models_found": 1,
+        "models_verified": 0,
+        "models_failed": 1,
+        "failed_models": ["sources.orders"],
+    }

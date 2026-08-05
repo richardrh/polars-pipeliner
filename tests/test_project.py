@@ -1,10 +1,18 @@
 from __future__ import annotations
 
+import sys
 from pathlib import Path
+from typing import Any, cast
 
+import polars as pl
 import pytest
 
-from polars_pipeliner import DiscoveryError, QueryValidationError, discover
+from polars_pipeliner import (
+    BuildResult,
+    DiscoveryError,
+    QueryValidationError,
+    discover,
+)
 
 
 def write_model(root: Path, relative: str, source: str) -> None:
@@ -245,9 +253,7 @@ def test_direct_input_attributes_allow_zero_one_and_multiple_inputs(
 
 
 @pytest.mark.parametrize("relative", ["staging/orders.py", "sources/orders.py"])
-def test_legacy_inputs_mapping_is_rejected_at_discovery(
-    tmp_path: Path, relative: str
-) -> None:
+def test_inputs_mapping_is_rejected_at_discovery(tmp_path: Path, relative: str) -> None:
     source = (
         source_model()
         .replace(
@@ -307,3 +313,127 @@ def test_sources_may_not_declare_inputs(tmp_path: Path) -> None:
 
     with pytest.raises(DiscoveryError, match="may not declare Input attributes"):
         discover(tmp_path)
+
+
+def test_colliding_path_derived_node_ids_are_rejected(tmp_path: Path) -> None:
+    first_path = tmp_path / "staging/orders.v1.py"
+    duplicate_path = tmp_path / "staging/orders/v1.py"
+    write_model(tmp_path, "staging/orders.v1.py", transform_model())
+    write_model(
+        tmp_path,
+        "staging/orders/v1.py",
+        'raise AssertionError("must not import duplicate")\n',
+    )
+
+    with pytest.raises(QueryValidationError) as caught:
+        discover(tmp_path)
+
+    assert str(caught.value) == (
+        f"Duplicate node ID 'staging.orders.v1': {first_path} and {duplicate_path}"
+    )
+
+
+def test_abstract_helpers_and_aliases_do_not_inflate_model_count(
+    tmp_path: Path,
+) -> None:
+    write_model(
+        tmp_path,
+        "staging/orders.py",
+        f"""from abc import ABC, abstractmethod
+import polars as pl
+from polars_pipeliner import Model
+
+class Helper(Model, ABC):
+    @abstractmethod
+    def transform(self) -> pl.LazyFrame:
+        raise NotImplementedError
+
+class Orders(Model):
+    output_schema = {SCHEMA}
+    def transform(self) -> pl.LazyFrame:
+        return pl.LazyFrame({{"value": [1]}})
+
+OrdersAlias = Orders
+""",
+    )
+
+    assert discover(tmp_path).node_ids == ("staging.orders",)
+
+
+def test_invalid_input_node_id_is_a_discovery_error(tmp_path: Path) -> None:
+    write_model(
+        tmp_path,
+        "staging/orders.py",
+        transform_model(
+            input_declarations="orders = Input(123, schema=SCHEMA)",
+            parameters="orders",
+            body="return orders",
+        ),
+    )
+
+    with pytest.raises(DiscoveryError, match="has an invalid input node ID or schema"):
+        discover(tmp_path)
+
+
+def test_non_function_model_method_is_a_discovery_error(tmp_path: Path) -> None:
+    write_model(
+        tmp_path,
+        "sources/orders.py",
+        source_model().replace(
+            "    def source(self) -> pl.LazyFrame:\n"
+            "        return pl.LazyFrame({'value': [1]})",
+            "    source = 1",
+        ),
+    )
+
+    with pytest.raises(
+        DiscoveryError, match="must define ordinary instance method source"
+    ):
+        discover(tmp_path)
+
+
+def test_failed_model_validation_does_not_register_module(tmp_path: Path) -> None:
+    successful_root = tmp_path / "successful"
+    failed_root = tmp_path / "failed"
+    write_model(successful_root, "sources/orders.py", source_model())
+    discover(successful_root)
+    prefix = "_polars_pipeliner_model_"
+    registered = {
+        name: module for name, module in sys.modules.items() if name.startswith(prefix)
+    }
+    write_model(
+        failed_root,
+        "sources/orders.py",
+        """import polars as pl
+from polars_pipeliner import SourceModel
+
+class Orders(SourceModel):
+    def source(self) -> pl.LazyFrame:
+        return pl.LazyFrame({"value": [1]})
+""",
+    )
+
+    with pytest.raises(DiscoveryError, match="must define its own output_schema"):
+        discover(failed_root)
+
+    assert {
+        name: module for name, module in sys.modules.items() if name.startswith(prefix)
+    } == registered
+
+
+def test_project_exposes_build_result_not_raw_graph(tmp_path: Path) -> None:
+    write_model(tmp_path, "sources/orders.py", source_model())
+
+    project = discover(tmp_path)
+    result = project.build()
+
+    assert isinstance(result, BuildResult)
+    assert tuple(result.frames) == ("sources.orders",)
+    assert tuple(result.schemas) == ("sources.orders",)
+    with pytest.raises(TypeError):
+        cast(Any, result.frames)["other"] = pl.LazyFrame()
+    with pytest.raises(TypeError):
+        cast(Any, result.schemas)["other"] = pl.Schema()
+    assert not hasattr(project, "graph")
+    assert project.node_ids == ("sources.orders",)
+    assert project.resolve() == ("sources.orders",)

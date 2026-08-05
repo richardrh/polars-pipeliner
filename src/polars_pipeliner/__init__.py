@@ -10,11 +10,13 @@ from .errors import (
     QueryExecutionError,
     QueryValidationError,
 )
+from .executor import BuildResult
 from .model import Input, MartModel, Model, SourceModel
 from .output import Output
 from .project import Project, discover
 
 __all__ = [
+    "BuildResult",
     "ConfigError",
     "DiscoveryError",
     "ModelValidationError",

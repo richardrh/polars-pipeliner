@@ -8,7 +8,7 @@ from pathlib import Path
 import polars as pl
 
 from .config import ProjectConfig, load_config
-from .discovery import ModelNode, discover_models
+from .discovery import ModelNode, _discover_models
 from .errors import ConfigError
 from .events import RunEvents, failure_fields
 from .executor import BuildResult, build_models, run_models
@@ -26,7 +26,6 @@ class Project:
         self._root = root
         self._graph = graph
         self.config = config
-        self.graph = graph.dependencies
         self._events = events
 
     @property
@@ -105,7 +104,7 @@ def discover(
         resolved_config = config if config is not None else load_config(config_path)
         if events is not None:
             events.set_log_level(resolved_config.log_level)
-        nodes = discover_models(root)
+        nodes = _discover_models(root)
         return Project(root, ModelGraph.create(nodes), resolved_config, events)
     except Exception as error:
         if events is None and resolved_config is not None:
@@ -115,11 +114,13 @@ def discover(
         if events is not None:
             events.emit(_started_event, root=root)
             fields = failure_fields(error)
+            models_found = fields.pop("models_found", len(nodes or {}))
+            assert isinstance(models_found, int)
             if _validation_summary:
                 events.emit(
                     _failure_event,
                     level="ERROR",
-                    summary=validation_summary(len(nodes or {}), set(), fields),
+                    summary=validation_summary(models_found, set(), fields),
                     **fields,
                 )
             else:

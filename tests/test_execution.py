@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import builtins
 import importlib
+import json
 from pathlib import Path
 from typing import cast
 
@@ -331,3 +332,28 @@ def test_second_direct_output_failure_is_attributed_to_its_mart(
     with pytest.raises(QueryExecutionError) as raised:
         discover(tmp_path).run()
     assert f"marts.second to {tmp_path / 'second'}" in str(raised.value)
+
+
+def test_unsupported_output_spec_fails_without_success(tmp_path: Path) -> None:
+    write(tmp_path, "sources/orders.py", source())
+    write(
+        tmp_path,
+        "marts/orders.py",
+        mart("Orders", "OutputSpec(destination='unsupported')").replace(
+            "from polars_pipeliner import Input, MartModel, Output",
+            "from polars_pipeliner import Input, MartModel\n"
+            "from polars_pipeliner.output import OutputSpec",
+        ),
+    )
+
+    with pytest.raises(QueryExecutionError, match="not a supported output"):
+        discover(tmp_path).run()
+
+    assert not (tmp_path / "unsupported").exists()
+    log_path = next((tmp_path / "target/runs").glob("*.jsonl"))
+    event_names = [
+        json.loads(line)["event"] for line in log_path.read_text().splitlines()
+    ]
+    assert "run_failed" in event_names
+    assert "output_written" not in event_names
+    assert "run_succeeded" not in event_names

@@ -155,13 +155,13 @@ class DiscoveryError(QueryError):
         )
 
     @classmethod
-    def invalid_binding(
+    def invalid_input_binding(
         cls, node_id: str, path: Path, label: str, kind: str
     ) -> DiscoveryError:
         return cls(f"Model {node_id} ({path}) has an invalid {label} {kind}")
 
     @classmethod
-    def legacy_inputs_mapping(cls, node_id: str, path: Path) -> DiscoveryError:
+    def unsupported_inputs_mapping(cls, node_id: str, path: Path) -> DiscoveryError:
         return cls(
             f"Model {node_id} ({path}) must declare each Input directly as a class "
             "attribute; inputs = {...} is not supported"
@@ -170,10 +170,6 @@ class DiscoveryError(QueryError):
     @classmethod
     def source_inputs(cls, node_id: str, path: Path) -> DiscoveryError:
         return cls(f"Source model {node_id} ({path}) may not declare Input attributes")
-
-    @classmethod
-    def invalid_source(cls, node_id: str, path: Path) -> DiscoveryError:
-        return cls(f"Model {node_id} ({path}) has an invalid input source")
 
     @classmethod
     def invalid_placement(
@@ -194,8 +190,10 @@ class QueryValidationError(QueryError):
     """The set of discovered models is not a valid DAG."""
 
     @classmethod
-    def duplicate_node_id(cls, node_id: str, path: Path) -> QueryValidationError:
-        return cls(f"Duplicate node ID {node_id!r}: {path}")
+    def duplicate_node_id(
+        cls, node_id: str, first_path: Path, duplicate_path: Path
+    ) -> QueryValidationError:
+        return cls(f"Duplicate node ID {node_id!r}: {first_path} and {duplicate_path}")
 
     @classmethod
     def missing_dependencies(
@@ -214,7 +212,7 @@ class QueryValidationError(QueryError):
         return cls(f"Cycle detected: {' -> '.join(nodes)}")
 
     @classmethod
-    def query_source_schema_mismatch(
+    def input_schema_mismatch(
         cls,
         node_id: str,
         path: Path,
@@ -247,13 +245,6 @@ class QueryBuildError(QueryError):
         return cls(
             f"Failed to build {node_id} ({path}): {detail}",
             context={"node_id": node_id, "path": path},
-        )
-
-    @classmethod
-    def source_failed(cls, location: str, detail: Exception) -> QueryBuildError:
-        return cls(
-            f"Failed to build physical source {_redact_uris(location)}: "
-            f"{_redact_uris(str(detail))}"
         )
 
 
@@ -290,12 +281,6 @@ class ModelValidationError(ValueError):
     ) -> None:
         super().__init__(message)
         self.context = context or {}
-
-    @classmethod
-    def schema_resolution_failed(
-        cls, model: type[object], detail: Exception
-    ) -> ModelValidationError:
-        return cls(f"{model.__qualname__}: could not resolve output schema: {detail}")
 
     @classmethod
     def schema_mismatch(
