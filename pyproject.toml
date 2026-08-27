@@ -1,6 +1,6 @@
 [project]
 name = "polars-pipeliner"
-version = "0.1.0"
+version = "0.2.2"
 description = "Build and run dependency-ordered Polars LazyFrame queries"
 readme = "README.md"
 authors = [
