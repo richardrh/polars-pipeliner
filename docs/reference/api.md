@@ -67,7 +67,7 @@ Mapping-style `inputs = {...}` declarations are not supported.
 | `Model` | `staging/`, `intermediate/` | `transform()` | Inputs and `output_schema` |
 | `MartModel` | `marts/` | `transform()` | Inputs, `output_schema`, and `output` |
 
-See [Model types](../concepts/models.md) for complete examples.
+See [Model types](/concepts/models) for complete examples.
 
 ## `Output`
 
@@ -134,7 +134,7 @@ copied and made immutable. Its values are redacted from execution failures and
 are not included in events or manifests.
 
 Output specifications are immutable. See
-[Sources and outputs](../concepts/io.md) for installation, credentials, S3, Delta,
+[Sources and outputs](/concepts/io) for installation, credentials, S3, Delta,
 and Iceberg examples.
 
 ## `BuildResult`

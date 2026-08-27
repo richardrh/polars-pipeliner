@@ -6,14 +6,12 @@ on:
       - master
     paths:
       - docs/**
-      - book.toml
       - .github/workflows/docs.yml
   push:
     branches:
       - master
     paths:
       - docs/**
-      - book.toml
       - .github/workflows/docs.yml
   workflow_dispatch:
 
@@ -32,35 +30,35 @@ jobs:
       contents: read
     steps:
       - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
-      - name: Install mdBook
-        env:
-          MDBOOK_VERSION: "0.5.4"
-          MDBOOK_SHA256: "3f28de05dafca9d0f2eab99c662116b0e37b89b1d96a08f8f430b9eeae958cd7"
-        run: |
-          archive="${RUNNER_TEMP}/mdbook.tar.gz"
-          curl --fail --location --silent --show-error \
-            "https://github.com/rust-lang/mdBook/releases/download/v${MDBOOK_VERSION}/mdbook-v${MDBOOK_VERSION}-x86_64-unknown-linux-gnu.tar.gz" \
-            --output "${archive}"
-          printf '%s  %s\n' "${MDBOOK_SHA256}" "${archive}" | sha256sum --check
-          tar --extract --gzip --file "${archive}" --directory "${RUNNER_TEMP}"
-          mkdir -p "${RUNNER_TEMP}/bin"
-          install "${RUNNER_TEMP}/mdbook" "${RUNNER_TEMP}/bin/mdbook"
-          echo "${RUNNER_TEMP}/bin" >> "${GITHUB_PATH}"
+      - name: Install pnpm
+        uses: pnpm/action-setup@008330803749db0355799c700092d9a85fd074e9 # v6.0.9
+        with:
+          package_json_file: docs/package.json
+
+      - name: Install Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: docs/pnpm-lock.yaml
+
+      - name: Install documentation dependencies
+        run: pnpm --dir docs install --frozen-lockfile
 
       - name: Build documentation
-        run: mdbook build
+        run: pnpm --dir docs build
 
       - name: Configure GitHub Pages
         if: github.event_name != 'pull_request'
-        uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
+        uses: actions/configure-pages@983d7736d9b0ae728b81ab479565c72886d7745b # v5.0.0
 
       - name: Upload GitHub Pages artifact
         if: github.event_name != 'pull_request'
-        uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        uses: actions/upload-pages-artifact@7b1f4a764d45c48632c6b24a0339c27f5614fb0b # v4.0.0
         with:
-          path: docs/book
+          path: docs/.vitepress/dist
 
   deploy:
     name: Deploy to GitHub Pages
@@ -76,4 +74,4 @@ jobs:
     steps:
       - name: Deploy GitHub Pages
         id: deployment
-        uses: actions/deploy-pages@cd2ce8fcbc39b97be8ca5fce6e763baed58fa128 # v5.0.0
+        uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4.0.5
