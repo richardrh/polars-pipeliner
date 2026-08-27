@@ -62,6 +62,6 @@ It is not a general-purpose scheduler or warehouse orchestrator.
 
 ## Start here
 
-- [Install the package and create a pipeline](getting-started.md)
-- [Understand the model types](concepts/models.md)
-- [Use the Python API](reference/api.md)
+- [Install the package and create a pipeline](/getting-started)
+- [Understand the model types](/concepts/models)
+- [Use the Python API](/reference/api)
