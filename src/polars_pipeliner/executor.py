@@ -155,6 +155,29 @@ def _manifest_destination(destination: str | Path) -> str | Path:
     )
 
 
+def _destination_identity(spec: OutputSpec, destination: str | Path) -> tuple[str, str]:
+    """Return a stable, secret-free identity for collision detection."""
+    if isinstance(spec, IcebergOutput):
+        return ("iceberg", f"{spec.catalog}:{spec.table}")
+    if isinstance(destination, Path):
+        return ("destination", str(destination.resolve(strict=False)))
+    parsed = urlsplit(destination)
+    if parsed.scheme:
+        normalized = urlunsplit(
+            (
+                parsed.scheme.lower(),
+                parsed.netloc.rsplit("@", 1)[-1].lower(),
+                parsed.path,
+                "",
+                "",
+            )
+        )
+        return ("destination", normalized)
+    if isinstance(spec, DestinationOutput):
+        return ("destination", destination)
+    return ("output", f"{type(spec).__module__}.{type(spec).__qualname__}:{id(spec)}")
+
+
 def _storage_options(spec: StorageOutput) -> dict[str, str] | None:
     return dict(spec.storage_options) if spec.storage_options is not None else None
 
@@ -308,6 +331,7 @@ def run_models(
     manifest: dict[str, str | Path] = {}
     file_outputs: list[tuple[str, str | Path, pl.LazyFrame, OutputSpec]] = []
     direct: list[tuple[str, pl.LazyFrame, OutputSpec, str | Path]] = []
+    destinations: dict[tuple[str, str], tuple[str, str | Path]] = {}
     for node_id, node in marts:
         model = cast(type[MartModel], node.model)
         spec = model.output
@@ -322,7 +346,6 @@ def run_models(
                 if isinstance(
                     spec, (ParquetOutput, CsvOutput, IpcOutput, NdjsonOutput)
                 ):
-                    _make_parent(destination)
                     file_outputs.append(
                         (node_id, destination, built.frames[node_id], spec)
                     )
@@ -331,7 +354,16 @@ def run_models(
             else:
                 manifest[node_id] = "output"
                 direct.append((node_id, built.frames[node_id], spec, "output"))
+            identity = _destination_identity(spec, manifest[node_id])
+            if previous := destinations.get(identity):
+                previous_node_id, safe_destination = previous
+                raise QueryExecutionError.duplicate_destination(
+                    str(safe_destination), (previous_node_id, node_id)
+                )
+            destinations[identity] = (node_id, identity[1])
         except Exception as error:
+            if isinstance(error, QueryExecutionError):
+                raise
             destination = manifest.get(node_id, "output")
             safe_error = redact_exception(error, _output_secrets(spec))
             raise QueryExecutionError.output_failed(
