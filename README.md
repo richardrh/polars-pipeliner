@@ -62,8 +62,21 @@ class CustomerOrders(MartModel):
 
 Requires Python 3.13+ and Polars 1.38.1+:
 
+Using `uv`:
+
 ```bash
 uv add polars-pipeliner
+```
+
+Using `pip`:
+
+```bash
+python -m pip install polars-pipeliner
+```
+
+Then run the bundled example:
+
+```bash
 uv run polars-pipeliner run examples/customer-orders --config examples/customer-orders/polars-pipeliner.toml
 ```
 
