@@ -208,5 +208,5 @@ The mart is written to `my-pipeline/target/values.parquet`.
 
 ## Next steps
 
-- See [Model types](/concepts/models) for placement and model contracts.
-- See [Python API](/reference/api) for the complete public interface.
+- See [Model types](concepts/models.md) for placement and model contracts.
+- See [Python API](reference/api.md) for the complete public interface.
