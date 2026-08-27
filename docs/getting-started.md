@@ -5,14 +5,16 @@
 Install Polars Pipeliner from
 [PyPI](https://pypi.org/project/polars-pipeliner/):
 
-```bash
-pip install polars-pipeliner
-```
-
 Using `uv`:
 
 ```bash
 uv add polars-pipeliner
+```
+
+Using `pip`:
+
+```bash
+python -m pip install polars-pipeliner
 ```
 
 Polars Pipeliner requires Python 3.13 or newer.
@@ -22,20 +24,23 @@ Polars Pipeliner requires Python 3.13 or newer.
 Install Delta Lake support when a mart writes Delta tables:
 
 ```bash
-pip install "polars-pipeliner[delta]"
+uv add "polars-pipeliner[delta]"
+# or: python -m pip install "polars-pipeliner[delta]"
 ```
 
 Install Apache Iceberg support when a mart writes catalog-managed Iceberg
 tables:
 
 ```bash
-pip install "polars-pipeliner[iceberg]"
+uv add "polars-pipeliner[iceberg]"
+# or: python -m pip install "polars-pipeliner[iceberg]"
 ```
 
 Install both extras:
 
 ```bash
-pip install "polars-pipeliner[delta,iceberg]"
+uv add "polars-pipeliner[delta,iceberg]"
+# or: python -m pip install "polars-pipeliner[delta,iceberg]"
 ```
 
 File outputs, including Parquet on S3, do not require these extras.
