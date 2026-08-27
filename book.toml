@@ -1,0 +1,21 @@
+[book]
+title = "polars-pipeliner"
+description = "Build and run dependency-ordered Polars LazyFrame queries"
+authors = ["Richard"]
+language = "en"
+src = "docs"
+
+[build]
+build-dir = "docs/book"
+create-missing = false
+
+[output.html]
+site-url = "/polars-pipeliner/"
+git-repository-url = "https://github.com/richardrh/polars-pipeliner"
+edit-url-template = "https://github.com/richardrh/polars-pipeliner/edit/master/docs/{path}"
+no-section-label = true
+smart-punctuation = true
+
+[output.html.search]
+enable = true
+
