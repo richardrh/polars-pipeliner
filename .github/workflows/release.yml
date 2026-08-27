@@ -61,7 +61,7 @@ jobs:
         run: uv lock --check
 
       - name: Sync locked environment
-        run: uv sync --frozen --all-groups --python "${PYTHON_VERSION}"
+        run: uv sync --frozen --all-extras --all-groups --python "${PYTHON_VERSION}"
 
       - name: Run tests
         run: uv run --frozen pytest
