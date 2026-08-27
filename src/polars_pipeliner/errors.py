@@ -259,6 +259,16 @@ class QueryExecutionError(QueryError):
     """A mart output failed during executor-owned materialization."""
 
     @classmethod
+    def duplicate_destination(
+        cls, destination: str, node_ids: Iterable[str]
+    ) -> QueryExecutionError:
+        models = ", ".join(node_ids)
+        return cls(
+            f"Multiple marts target the same output {_redact_uris(destination)}: "
+            f"{models}"
+        )
+
+    @classmethod
     def output_failed(
         cls, node_id: str, destination: str, detail: Exception
     ) -> QueryExecutionError:

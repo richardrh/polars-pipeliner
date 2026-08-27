@@ -330,6 +330,58 @@ def test_grouped_output_failure_identifies_all_affected_destinations(
     assert str(tmp_path / "second.csv") in message
 
 
+@pytest.mark.parametrize(
+    ("first", "second", "destination"),
+    [
+        (
+            "Output.parquet('target/../same.parquet')",
+            "Output.csv('same.parquet')",
+            "same.parquet",
+        ),
+        (
+            "Output.parquet('s3://key:secret@BUCKET/same?token=one')",
+            "Output.delta('s3://bucket/same?token=two#fragment')",
+            "s3://bucket/same",
+        ),
+        (
+            "Output.iceberg('analytics.orders', catalog='production')",
+            "Output.iceberg('analytics.orders', catalog='production')",
+            "production:analytics.orders",
+        ),
+    ],
+)
+def test_duplicate_output_destinations_fail_before_any_write(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    first: str,
+    second: str,
+    destination: str,
+) -> None:
+    write(tmp_path, "sources/orders.py", source())
+    write(tmp_path, "marts/first.py", mart("First", first))
+    write(tmp_path, "marts/second.py", mart("Second", second))
+    writes: list[object] = []
+    monkeypatch.setattr(pl, "collect_all", lambda frames: writes.append(frames))
+    monkeypatch.setattr(
+        pl.LazyFrame,
+        "sink_delta",
+        lambda self, target, **kwargs: writes.append(target),
+        raising=False,
+    )
+
+    with pytest.raises(QueryExecutionError, match="Multiple marts target") as raised:
+        discover(tmp_path).run()
+
+    message = str(raised.value)
+    assert "marts.first" in message
+    assert "marts.second" in message
+    assert destination in message
+    assert "secret" not in message
+    assert "token=" not in message
+    assert writes == []
+    assert not (tmp_path / "same.parquet").exists()
+
+
 def test_output_preparation_failure_is_attributed_to_its_mart(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
