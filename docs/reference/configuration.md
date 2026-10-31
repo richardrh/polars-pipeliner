@@ -4,7 +4,7 @@ Configuration is optional.
 
 ## Defaults
 
-Without a configuration file, `discover(root)` uses:
+Without a configuration file or `config`, `discover(root)` uses:
 
 | Setting | Default |
 | --- | --- |
@@ -36,7 +36,8 @@ project = discover("my-pipeline", config=config)
 
 ## Configure with TOML
 
-The filename is your choice. The table must be named `polars-pipeliner`.
+Put `polars-pipeliner.toml` in the project root. `discover(root)` and the CLI
+load it automatically. The table must be named `polars-pipeliner`.
 
 ```toml
 [polars-pipeliner]
@@ -44,17 +45,29 @@ LOG_LEVEL = "INFO"
 RUN_LOG_DIR = "target/runs"
 ```
 
-Load the file through `discover()`:
-
 ```python
 from polars_pipeliner import discover
 
 
+project = discover("my-pipeline")  # loads my-pipeline/polars-pipeliner.toml
+```
+
+To use a different file, pass `config_path` (or `--config` on the command
+line). Relative paths are resolved from the current working directory.
+
+```python
 project = discover(
     "my-pipeline",
-    config_path="polars-pipeliner.toml",
+    config_path="configs/production.toml",
 )
 ```
+
+Precedence, highest first:
+
+1. `config=ProjectConfig(...)`
+2. `config_path=...` / `--config`
+3. `<root>/polars-pipeliner.toml`
+4. built-in defaults
 
 Do not pass both `config` and `config_path`.
 

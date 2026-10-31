@@ -77,7 +77,7 @@ python -m pip install polars-pipeliner
 Then run the bundled example:
 
 ```bash
-uv run polars-pipeliner run examples/customer-orders --config examples/customer-orders/polars-pipeliner.toml
+uv run polars-pipeliner run examples/customer-orders
 ```
 
 The CLI writes JSONL events to stdout and materializes
@@ -91,7 +91,7 @@ uv run python examples/customer-orders/run.py
 Validate declared and resolved schemas without writing a mart:
 
 ```bash
-uv run polars-pipeliner validate examples/customer-orders --config examples/customer-orders/polars-pipeliner.toml
+uv run polars-pipeliner validate examples/customer-orders
 ```
 
 ```python

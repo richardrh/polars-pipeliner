@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from polars_pipeliner import (
+    ConfigError,
     ProjectConfig,
     QueryBuildError,
     QueryValidationError,
@@ -189,3 +190,47 @@ def test_warning_log_level_suppresses_node_events_but_keeps_boundaries(
         "run_started",
         "run_succeeded",
     ]
+
+
+def test_project_root_config_file_is_loaded_by_default(tmp_path: Path) -> None:
+    write(tmp_path, "sources/orders.py", source())
+    write(tmp_path, "marts/orders.py", mart())
+    write(
+        tmp_path,
+        "polars-pipeliner.toml",
+        '[polars-pipeliner]\nLOG_LEVEL = "WARNING"\nRUN_LOG_DIR = "logs"\n',
+    )
+
+    discover(tmp_path).run()
+
+    [log_file] = (tmp_path / "logs").glob("*.jsonl")
+    assert [event["event"] for event in logged_events(log_file)] == [
+        "run_started",
+        "run_succeeded",
+    ]
+
+
+def test_explicit_config_takes_precedence_over_project_root_config_file(
+    tmp_path: Path,
+) -> None:
+    write(tmp_path, "sources/orders.py", source())
+    write(
+        tmp_path,
+        "polars-pipeliner.toml",
+        '[polars-pipeliner]\nLOG_LEVEL = "WARNING"\nRUN_LOG_DIR = "logs"\n',
+    )
+    selected = tmp_path / "selected.toml"
+    selected.write_text('[polars-pipeliner]\nLOG_LEVEL = "DEBUG"\n')
+
+    assert discover(tmp_path, config_path=selected).config == ProjectConfig(
+        log_level="DEBUG"
+    )
+    assert discover(tmp_path, config=ProjectConfig()).config == ProjectConfig()
+
+
+def test_invalid_project_root_config_file_fails_discovery(tmp_path: Path) -> None:
+    write(tmp_path, "sources/orders.py", source())
+    write(tmp_path, "polars-pipeliner.toml", "[polars-pipeliner]\n")
+
+    with pytest.raises(ConfigError, match="missing polars-pipeliner.LOG_LEVEL"):
+        discover(tmp_path)
