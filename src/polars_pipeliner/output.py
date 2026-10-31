@@ -6,7 +6,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
-from typing import Literal
+from typing import Literal, NamedTuple
+from urllib.parse import urlsplit, urlunsplit
 
 type Destination = str | Path
 type StorageOptions = Mapping[str, str]
@@ -94,6 +95,76 @@ class IcebergOutput(OutputSpec):
             raise ValueError("Iceberg table must be a non-empty identifier")
         if not self.catalog:
             raise ValueError("Iceberg catalog must be a non-empty name")
+
+
+class OutputPlan(NamedTuple):
+    """Where a mart output is written, and how it is reported and compared."""
+
+    target: Destination
+    manifest_entry: Destination
+    identity: tuple[str, str]
+
+
+def plan_output(spec: OutputSpec, root: Path) -> OutputPlan:
+    """Resolve a mart output against the project root."""
+    target: Destination
+    entry: Destination
+    if isinstance(spec, IcebergOutput):
+        target = spec.table
+        entry = f"{spec.catalog}:{spec.table}"
+    elif isinstance(spec, DestinationOutput):
+        target = _destination(spec, root)
+        entry = _manifest_destination(target)
+    else:
+        target = entry = "output"
+    return OutputPlan(target, entry, _destination_identity(spec, entry))
+
+
+def _destination(spec: DestinationOutput, root: Path) -> Destination:
+    value = spec.destination
+    if isinstance(value, Path):
+        return value if value.is_absolute() else root / value
+    if urlsplit(value).scheme:
+        return value
+    return root / value
+
+
+def _manifest_destination(destination: Destination) -> Destination:
+    if isinstance(destination, Path):
+        return destination
+    parsed = urlsplit(destination)
+    return (
+        urlunsplit(
+            (parsed.scheme, parsed.netloc.rsplit("@", 1)[-1], parsed.path, "", "")
+        )
+        if parsed.scheme
+        else destination
+    )
+
+
+def _destination_identity(
+    spec: OutputSpec, destination: Destination
+) -> tuple[str, str]:
+    """Return a stable, secret-free identity for collision detection."""
+    if isinstance(spec, IcebergOutput):
+        return ("iceberg", f"{spec.catalog}:{spec.table}")
+    if isinstance(destination, Path):
+        return ("destination", str(destination.resolve(strict=False)))
+    parsed = urlsplit(destination)
+    if parsed.scheme:
+        normalized = urlunsplit(
+            (
+                parsed.scheme.lower(),
+                parsed.netloc.rsplit("@", 1)[-1].lower(),
+                parsed.path,
+                "",
+                "",
+            )
+        )
+        return ("destination", normalized)
+    if isinstance(spec, DestinationOutput):
+        return ("destination", destination)
+    return ("output", f"{type(spec).__module__}.{type(spec).__qualname__}:{id(spec)}")
 
 
 class Output:

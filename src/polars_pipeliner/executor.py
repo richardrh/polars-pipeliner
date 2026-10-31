@@ -9,7 +9,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any, cast
-from urllib.parse import urlsplit, urlunsplit
 
 import polars as pl
 
@@ -26,13 +25,13 @@ from .output import (
     CsvOutput,
     DeltaOutput,
     DeltaUpsertOutput,
-    DestinationOutput,
     IcebergOutput,
     IpcOutput,
     NdjsonOutput,
     OutputSpec,
     ParquetOutput,
     StorageOutput,
+    plan_output,
 )
 
 _ICEBERG_STORAGE_OPTION_NAMES = {
@@ -131,51 +130,6 @@ def build_models(
                     duration=round(time.monotonic() - started, 6),
                 )
     return BuildResult(MappingProxyType(frames), MappingProxyType(schemas))
-
-
-def _destination(spec: DestinationOutput, root: Path) -> str | Path:
-    value = spec.destination
-    if isinstance(value, Path):
-        return value if value.is_absolute() else root / value
-    if urlsplit(value).scheme:
-        return value
-    return root / value
-
-
-def _manifest_destination(destination: str | Path) -> str | Path:
-    if isinstance(destination, Path):
-        return destination
-    parsed = urlsplit(destination)
-    return (
-        urlunsplit(
-            (parsed.scheme, parsed.netloc.rsplit("@", 1)[-1], parsed.path, "", "")
-        )
-        if parsed.scheme
-        else destination
-    )
-
-
-def _destination_identity(spec: OutputSpec, destination: str | Path) -> tuple[str, str]:
-    """Return a stable, secret-free identity for collision detection."""
-    if isinstance(spec, IcebergOutput):
-        return ("iceberg", f"{spec.catalog}:{spec.table}")
-    if isinstance(destination, Path):
-        return ("destination", str(destination.resolve(strict=False)))
-    parsed = urlsplit(destination)
-    if parsed.scheme:
-        normalized = urlunsplit(
-            (
-                parsed.scheme.lower(),
-                parsed.netloc.rsplit("@", 1)[-1].lower(),
-                parsed.path,
-                "",
-                "",
-            )
-        )
-        return ("destination", normalized)
-    if isinstance(spec, DestinationOutput):
-        return ("destination", destination)
-    return ("output", f"{type(spec).__module__}.{type(spec).__qualname__}:{id(spec)}")
 
 
 def _storage_options(spec: StorageOutput) -> dict[str, str] | None:
@@ -331,44 +285,15 @@ def run_models(
     manifest: dict[str, str | Path] = {}
     file_outputs: list[tuple[str, str | Path, pl.LazyFrame, OutputSpec]] = []
     direct: list[tuple[str, pl.LazyFrame, OutputSpec, str | Path]] = []
-    destinations: dict[tuple[str, str], tuple[str, str | Path]] = {}
     for node_id, node in marts:
-        model = cast(type[MartModel], node.model)
-        spec = model.output
-        try:
-            if isinstance(spec, IcebergOutput):
-                target = spec.table
-                manifest[node_id] = f"{spec.catalog}:{spec.table}"
-                direct.append((node_id, built.frames[node_id], spec, target))
-            elif isinstance(spec, DestinationOutput):
-                destination = _destination(spec, root)
-                manifest[node_id] = _manifest_destination(destination)
-                if isinstance(
-                    spec, (ParquetOutput, CsvOutput, IpcOutput, NdjsonOutput)
-                ):
-                    file_outputs.append(
-                        (node_id, destination, built.frames[node_id], spec)
-                    )
-                else:
-                    direct.append((node_id, built.frames[node_id], spec, destination))
-            else:
-                manifest[node_id] = "output"
-                direct.append((node_id, built.frames[node_id], spec, "output"))
-            identity = _destination_identity(spec, manifest[node_id])
-            if previous := destinations.get(identity):
-                previous_node_id, safe_destination = previous
-                raise QueryExecutionError.duplicate_destination(
-                    str(safe_destination), (previous_node_id, node_id)
-                )
-            destinations[identity] = (node_id, identity[1])
-        except Exception as error:
-            if isinstance(error, QueryExecutionError):
-                raise
-            destination = manifest.get(node_id, "output")
-            safe_error = redact_exception(error, _output_secrets(spec))
-            raise QueryExecutionError.output_failed(
-                node_id, str(destination), safe_error
-            ) from safe_error
+        spec = cast(type[MartModel], node.model).output
+        frame = built.frames[node_id]
+        # Discovery already planned every output and rejected collisions.
+        target, manifest[node_id], _ = plan_output(spec, root)
+        if isinstance(spec, (ParquetOutput, CsvOutput, IpcOutput, NdjsonOutput)):
+            file_outputs.append((node_id, target, frame, spec))
+        else:
+            direct.append((node_id, frame, spec, target))
     if file_outputs:
         try:
             pl.collect_all(
