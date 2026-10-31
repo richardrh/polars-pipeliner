@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
 from typing import Literal
+from urllib.parse import urlsplit
 
 type Destination = str | Path
 type StorageOptions = Mapping[str, str]
@@ -41,6 +42,18 @@ class DestinationOutput(StorageOutput):
     """An output addressed by a local path or storage URI."""
 
     destination: Destination
+
+    def __post_init__(self) -> None:
+        StorageOutput.__post_init__(self)
+        if (
+            isinstance(self.destination, str)
+            and "@" in urlsplit(self.destination).netloc
+        ):
+            # The URI is not echoed: it contains the credentials.
+            raise ValueError(
+                "Output destination URIs may not contain credentials "
+                "(user:password@); pass them in storage_options or the environment"
+            )
 
 
 @dataclass(frozen=True, kw_only=True, slots=True)
@@ -94,6 +107,13 @@ class IcebergOutput(OutputSpec):
             raise ValueError("Iceberg table must be a non-empty identifier")
         if not self.catalog:
             raise ValueError("Iceberg catalog must be a non-empty name")
+
+
+def output_secrets(spec: OutputSpec) -> tuple[str, ...]:
+    """Return values that must never appear in errors about this output."""
+    if isinstance(spec, StorageOutput) and spec.storage_options is not None:
+        return tuple(spec.storage_options.values())
+    return ()
 
 
 class Output:

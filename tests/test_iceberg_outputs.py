@@ -149,6 +149,35 @@ def test_iceberg_catalog_is_only_loaded_during_run(
         project.run()
 
 
+def test_iceberg_catalog_failure_does_not_retain_catalog_secrets(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    secret = "never-log-this-secret"
+
+    def load_catalog(name: str) -> Catalog:
+        raise RuntimeError(f"catalog password {secret} rejected")
+
+    monkeypatch.setattr(iceberg_catalog, "load_catalog", load_catalog)
+    root = tmp_path / "project"
+    write_pipeline(
+        root,
+        {"id": [1], "value": [10]},
+        "Output.iceberg('analytics.orders', catalog='test')",
+    )
+
+    with pytest.raises(
+        QueryExecutionError, match="Could not load Iceberg catalog"
+    ) as raised:
+        discover(root).run()
+
+    reachable: list[BaseException | None] = [raised.value]
+    while reachable:
+        current = reachable.pop()
+        if current is not None:
+            assert secret not in str(current)
+            reachable.extend((current.__cause__, current.__context__))
+
+
 def test_iceberg_missing_table_is_a_structured_run_failure(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

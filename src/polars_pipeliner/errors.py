@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable, Iterator
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
 
@@ -31,18 +31,59 @@ def redact_text(text: str) -> str:
     return _redact_uris(text)
 
 
-def redact_exception(error: Exception, secrets: Iterable[str] = ()) -> Exception:
-    """Return an equivalent exception whose text does not expose secrets."""
-    detail = _redact_uris(str(error))
+def _redact(text: str, secrets: tuple[str, ...]) -> str:
+    text = _redact_uris(text)
     for secret in secrets:
-        if secret:
-            detail = detail.replace(secret, "***")
-    if detail == str(error):
+        text = text.replace(secret, "***")
+    return text
+
+
+def _exception_chain(error: BaseException) -> Iterator[BaseException]:
+    """Yield every exception reachable from error, including suppressed context."""
+    seen: set[int] = set()
+    pending: list[BaseException | None] = [error]
+    while pending:
+        current = pending.pop()
+        if current is None or id(current) in seen:
+            continue
+        seen.add(id(current))
+        yield current
+        pending.extend((current.__cause__, current.__context__))
+
+
+def redact_exception(error: Exception, secrets: Iterable[str] = ()) -> Exception:
+    """Return error unchanged if no secret is reachable from it.
+
+    Otherwise return a redacted copy with no ``__cause__`` or ``__context__``,
+    so the unredacted chain cannot be recovered from the copy.
+    """
+    secrets = tuple(secret for secret in secrets if secret)
+    if all(
+        _redact(str(current), secrets) == str(current)
+        for current in _exception_chain(error)
+    ):
         return error
+    detail = _redact(str(error), secrets)
     try:
-        return type(error)(detail)
+        safe = type(error)(detail)
     except Exception:
-        return RuntimeError(detail)
+        safe = RuntimeError(detail)
+    if isinstance(error, QueryError) and isinstance(safe, QueryError):
+        safe.context = error.context
+    return safe.with_traceback(error.__traceback__)
+
+
+def redacted_call[T](call: Callable[[], T], secrets: Iterable[str] = ()) -> T:
+    """Return call(), or raise its failure redacted by ``redact_exception``.
+
+    The failure is raised after the ``except`` block: raising inside it would
+    attach the unredacted original as ``__context__``.
+    """
+    try:
+        return call()
+    except Exception as error:
+        safe = redact_exception(error, secrets)
+    raise safe
 
 
 class QueryError(Exception):

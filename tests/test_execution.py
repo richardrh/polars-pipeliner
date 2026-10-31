@@ -10,7 +10,28 @@ import polars as pl
 import pytest
 
 import polars_pipeliner.executor as executor
-from polars_pipeliner import QueryBuildError, QueryExecutionError, discover
+from polars_pipeliner import (
+    DiscoveryError,
+    Output,
+    QueryBuildError,
+    QueryExecutionError,
+    discover,
+)
+
+
+def chain_text(error: BaseException) -> str:
+    """Return the text of every exception reachable from error."""
+    seen: set[int] = set()
+    pending: list[BaseException | None] = [error]
+    texts: list[str] = []
+    while pending:
+        current = pending.pop()
+        if current is None or id(current) in seen:
+            continue
+        seen.add(id(current))
+        texts.append(str(current))
+        pending.extend((current.__cause__, current.__context__))
+    return "\n".join(texts)
 
 
 def write(root: Path, relative: str, contents: str) -> None:
@@ -227,7 +248,7 @@ class Orders(SourceModel):
 def test_uri_manifest_and_errors_are_redacted(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    uri = "s3://key:secret@bucket/orders.parquet?token=value#fragment"
+    uri = "s3://bucket/orders.parquet?token=value#fragment"
     write(tmp_path, "sources/orders.py", source())
     write(tmp_path, "marts/orders.py", mart("Orders", f"Output.parquet({uri!r})"))
 
@@ -237,10 +258,16 @@ def test_uri_manifest_and_errors_are_redacted(
     monkeypatch.setattr(pl, "collect_all", broken)
     with pytest.raises(QueryExecutionError) as raised:
         discover(tmp_path).run()
-    message = str(raised.value) + str(raised.value.__cause__)
+    message = chain_text(raised.value)
     assert "s3://bucket/orders.parquet" in message
-    for secret in ("key", "secret", "token", "value", "fragment"):
+    for secret in ("token", "value", "fragment"):
         assert secret not in message
+
+
+def test_destination_uri_with_credentials_is_rejected() -> None:
+    with pytest.raises(ValueError, match="may not contain credentials") as raised:
+        Output.parquet("s3://key:hunter2@bucket/orders.parquet")
+    assert "hunter2" not in str(raised.value)
 
 
 def test_object_store_options_are_forwarded(
@@ -306,9 +333,65 @@ def test_object_store_options_are_redacted_from_failures(
     with pytest.raises(QueryExecutionError) as raised:
         discover(tmp_path).run()
 
-    message = str(raised.value) + str(raised.value.__cause__)
+    message = chain_text(raised.value)
     assert secret not in message
     assert "***" in message
+
+
+def test_build_failure_chain_does_not_retain_uri_secrets(tmp_path: Path) -> None:
+    uri = "s3://key:secret@bucket/data?token=value#fragment"
+    write(tmp_path, "sources/orders.py", source(f"raise RuntimeError({uri!r})"))
+    write(tmp_path, "marts/orders.py", mart("Orders", "Output.parquet('out.parquet')"))
+
+    with pytest.raises(QueryBuildError) as raised:
+        discover(tmp_path).run()
+
+    assert "s3://bucket/data" in str(raised.value)
+    for secret in ("key", "secret", "token", "value", "fragment"):
+        assert secret not in chain_text(raised.value)
+
+
+def test_model_import_failure_chain_does_not_retain_uri_secrets(
+    tmp_path: Path,
+) -> None:
+    uri = "s3://key:secret@bucket/data?token=value#fragment"
+    write(tmp_path, "sources/orders.py", f"raise RuntimeError({uri!r})\n")
+
+    with pytest.raises(DiscoveryError) as raised:
+        discover(tmp_path)
+
+    assert "s3://bucket/data" in str(raised.value)
+    for secret in ("key", "secret", "token", "value", "fragment"):
+        assert secret not in chain_text(raised.value)
+
+
+def test_output_failure_chain_drops_secret_bearing_context(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    secret = "never-log-this-secret"
+    write(tmp_path, "sources/orders.py", source())
+    write(
+        tmp_path,
+        "marts/orders.py",
+        mart(
+            "Orders",
+            "Output.delta('s3://bucket/orders', "
+            f"storage_options={{'secret_access_key': {secret!r}}})",
+        ),
+    )
+
+    def broken_write(*args: object) -> None:
+        try:
+            raise OSError(f"credential {secret} failed")
+        except OSError:
+            raise RuntimeError("Delta write failed") from None
+
+    monkeypatch.setattr(executor, "_write_delta", broken_write)
+
+    with pytest.raises(QueryExecutionError, match="Delta write failed") as raised:
+        discover(tmp_path).run()
+
+    assert secret not in chain_text(raised.value)
 
 
 def test_grouped_output_failure_identifies_all_affected_destinations(
@@ -339,7 +422,7 @@ def test_grouped_output_failure_identifies_all_affected_destinations(
             "same.parquet",
         ),
         (
-            "Output.parquet('s3://key:secret@BUCKET/same?token=one')",
+            "Output.parquet('s3://BUCKET/same?token=one')",
             "Output.delta('s3://bucket/same?token=two#fragment')",
             "s3://bucket/same",
         ),
@@ -399,10 +482,10 @@ def test_output_preparation_failure_is_attributed_to_its_mart(
     assert f"marts.orders to {tmp_path / 'out.parquet'}" in str(raised.value)
 
 
-def test_uri_manifest_redacts_credentials_query_and_fragment(
+def test_uri_manifest_strips_query_and_fragment(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    uri = "s3://key:secret@bucket/orders?token=value#fragment"
+    uri = "s3://bucket/orders?token=value#fragment"
     write(tmp_path, "sources/orders.py", source())
     write(tmp_path, "marts/orders.py", mart("Orders", f"Output.delta({uri!r})"))
     monkeypatch.setattr(

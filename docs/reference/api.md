@@ -130,8 +130,12 @@ PyIceberg catalog is loaded only during `project.run()`.
 ### Storage options
 
 `storage_options` accepts a mapping of backend-specific strings. The mapping is
-copied and made immutable. Its values are redacted from execution failures and
-are not included in events or manifests.
+copied and made immutable. Its values are redacted from every error raised by
+`discover()`, `build()`, `validate()`, and `run()`, including chained
+exceptions, and are not included in events or manifests.
+
+Destination URIs may not contain credentials (`user:password@`); passing one
+raises `ValueError`.
 
 Output specifications are immutable. See
 [Sources and outputs](/concepts/io) for installation, credentials, S3, Delta,
