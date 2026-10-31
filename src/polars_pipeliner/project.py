@@ -3,16 +3,19 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from functools import partial
 from pathlib import Path
 
 import polars as pl
 
 from .config import ProjectConfig, load_config
 from .discovery import ModelNode, _discover_models
-from .errors import ConfigError
+from .errors import ConfigError, redacted_call
 from .events import RunEvents, failure_fields
 from .executor import BuildResult, build_models, run_models
 from .graph import ModelGraph
+from .model import MartModel
+from .output import output_secrets
 
 
 class Project:
@@ -27,6 +30,13 @@ class Project:
         self._graph = graph
         self.config = config
         self._events = events
+        # Values that must never appear in errors leaving this project.
+        self._secrets = tuple(
+            secret
+            for node in graph.nodes.values()
+            if issubclass(node.model, MartModel)
+            for secret in output_secrets(node.model.output)
+        )
 
     @property
     def node_ids(self) -> tuple[str, ...]:
@@ -36,7 +46,7 @@ class Project:
         return self._graph.resolve()
 
     def build(self) -> BuildResult:
-        return build_models(self._graph)
+        return redacted_call(partial(build_models, self._graph), self._secrets)
 
     def run(self) -> Mapping[str, str | Path]:
         events = self._events or RunEvents.for_project(
@@ -44,7 +54,9 @@ class Project:
         )
         events.emit("run_started", root=self._root)
         try:
-            manifest = run_models(self._graph, self._root, events)
+            manifest = redacted_call(
+                partial(run_models, self._graph, self._root, events), self._secrets
+            )
         except Exception as error:
             events.emit("run_failed", level="ERROR", **failure_fields(error))
             raise
@@ -59,11 +71,15 @@ class Project:
         events.emit("validation_started", root=self._root)
         validated_nodes: set[str] = set()
         try:
-            built = build_models(
-                self._graph,
-                events,
-                include_event_schema=True,
-                validated_nodes=validated_nodes,
+            built = redacted_call(
+                partial(
+                    build_models,
+                    self._graph,
+                    events,
+                    include_event_schema=True,
+                    validated_nodes=validated_nodes,
+                ),
+                self._secrets,
             )
         except Exception as error:
             fields = failure_fields(error)
@@ -104,7 +120,7 @@ def discover(
         resolved_config = config if config is not None else load_config(config_path)
         if events is not None:
             events.set_log_level(resolved_config.log_level)
-        nodes = _discover_models(root)
+        nodes = redacted_call(partial(_discover_models, root))
         return Project(root, ModelGraph.create(nodes), resolved_config, events)
     except Exception as error:
         if events is None and resolved_config is not None:

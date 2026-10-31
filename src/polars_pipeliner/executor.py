@@ -6,6 +6,7 @@ import importlib.util
 import time
 from collections.abc import Mapping
 from dataclasses import dataclass
+from functools import partial
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any, cast
@@ -18,6 +19,7 @@ from .errors import (
     QueryBuildError,
     QueryExecutionError,
     redact_exception,
+    redacted_call,
 )
 from .events import RunEvents
 from .graph import ModelGraph
@@ -33,6 +35,7 @@ from .output import (
     OutputSpec,
     ParquetOutput,
     StorageOutput,
+    output_secrets,
 )
 
 _ICEBERG_STORAGE_OPTION_NAMES = {
@@ -182,12 +185,6 @@ def _storage_options(spec: StorageOutput) -> dict[str, str] | None:
     return dict(spec.storage_options) if spec.storage_options is not None else None
 
 
-def _output_secrets(spec: OutputSpec) -> tuple[str, ...]:
-    if isinstance(spec, StorageOutput) and spec.storage_options is not None:
-        return tuple(spec.storage_options.values())
-    return ()
-
-
 def _iceberg_storage_options(properties: Mapping[str, str]) -> dict[str, str] | None:
     options = {
         translated: value
@@ -296,24 +293,31 @@ def _write_iceberg(frame: pl.LazyFrame, spec: IcebergOutput) -> None:
     _require_optional_dependency("pyiceberg", "iceberg", "Iceberg")
     from pyiceberg.catalog import load_catalog
 
+    # Load failures are raised after the except block so the original error,
+    # which may contain catalog credentials, is not attached as __context__.
     try:
         catalog = load_catalog(spec.catalog)
     except Exception:
-        raise RuntimeError(f"Could not load Iceberg catalog {spec.catalog!r}") from None
+        catalog = None
+    if catalog is None:
+        raise RuntimeError(f"Could not load Iceberg catalog {spec.catalog!r}")
     try:
         table = catalog.load_table(spec.table)
     except Exception:
+        table = None
+    if table is None:
         raise RuntimeError(
             f"Could not load Iceberg table {spec.table!r} from catalog {spec.catalog!r}"
-        ) from None
-    try:
-        frame.sink_iceberg(
+        )
+    redacted_call(
+        partial(
+            frame.sink_iceberg,
             table,
             mode=spec.mode,
             storage_options=_iceberg_storage_options(catalog.properties),
-        )
-    except Exception as error:
-        raise redact_exception(error, catalog.properties.values()) from None
+        ),
+        secrets=catalog.properties.values(),
+    )
 
 
 def run_models(
@@ -365,7 +369,7 @@ def run_models(
             if isinstance(error, QueryExecutionError):
                 raise
             destination = manifest.get(node_id, "output")
-            safe_error = redact_exception(error, _output_secrets(spec))
+            safe_error = redact_exception(error, output_secrets(spec))
             raise QueryExecutionError.output_failed(
                 node_id, str(destination), safe_error
             ) from safe_error
@@ -381,7 +385,7 @@ def run_models(
             secrets = (
                 secret
                 for _, _, _, spec in file_outputs
-                for secret in _output_secrets(spec)
+                for secret in output_secrets(spec)
             )
             safe_error = redact_exception(error, secrets)
             raise QueryExecutionError.grouped_outputs_failed(
@@ -410,7 +414,7 @@ def run_models(
                     path=manifest[node_id],
                 )
         except Exception as error:
-            safe_error = redact_exception(error, _output_secrets(spec))
+            safe_error = redact_exception(error, output_secrets(spec))
             raise QueryExecutionError.output_failed(
                 node_id, str(manifest[node_id]), safe_error
             ) from safe_error

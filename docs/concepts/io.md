@@ -133,8 +133,11 @@ class Orders(MartModel):
 ```
 
 Storage options are copied into an immutable mapping. They are never included
-in run events. Prefer provider-chain credentials instead of placing secrets in
-model files.
+in run events, and their values are replaced with `***` in errors. Prefer
+provider-chain credentials instead of placing secrets in model files.
+
+Destination URIs may not contain credentials. `Output.parquet("s3://user:pass@bucket/...")`
+raises `ValueError`; pass credentials in `storage_options` or the environment.
 
 ## Delta Lake
 
@@ -305,5 +308,5 @@ It does not currently support:
 }
 ```
 
-URI credentials, query strings, fragments, and storage options are not included
-in the manifest.
+Query strings, fragments, and storage options are not included in the
+manifest.
