@@ -193,23 +193,20 @@ jobs:
       - name: Install Python ${{ env.PYTHON_VERSION }}
         run: uv python install "${PYTHON_VERSION}"
 
-      - name: Start MinIO
+      # MinIO's images were removed from Docker Hub; moto is pinned via PyPI.
+      - name: Start S3 server (moto)
         run: |
-          docker run --detach --rm \
-            --name polars-pipeliner-minio \
-            --publish 9000:9000 \
-            --env MINIO_ROOT_USER="${AWS_ACCESS_KEY_ID}" \
-            --env MINIO_ROOT_PASSWORD="${AWS_SECRET_ACCESS_KEY}" \
-            minio/minio@sha256:a1a8bd4ac40ad7881a245bab97323e18f971e4d4cba2c2007ec1bedd21cbaba2 \
-            server /data
-          for attempt in {1..30}; do
+          nohup uvx --from 'moto[server]==5.2.5' \
+            moto_server -H 127.0.0.1 -p 9000 \
+            > "${RUNNER_TEMP}/moto.log" 2>&1 &
+          for attempt in {1..60}; do
             if curl --fail --silent \
-              http://127.0.0.1:9000/minio/health/live > /dev/null; then
+              http://127.0.0.1:9000/moto-api/ > /dev/null; then
               exit 0
             fi
             sleep 1
           done
-          docker logs polars-pipeliner-minio
+          cat "${RUNNER_TEMP}/moto.log"
           exit 1
 
       - name: Sync locked environment with storage extras
@@ -218,6 +215,6 @@ jobs:
       - name: Run S3 integration tests
         run: uv run --frozen pytest tests/test_s3_outputs.py
 
-      - name: Show MinIO logs after failure
+      - name: Show S3 server logs after failure
         if: failure()
-        run: docker logs polars-pipeliner-minio
+        run: cat "${RUNNER_TEMP}/moto.log"
