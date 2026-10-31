@@ -40,25 +40,21 @@ jobs:
       - name: Install Python ${{ env.PYTHON_VERSION }}
         run: uv python install "${PYTHON_VERSION}"
 
-      - name: Verify release tag matches project version
-        run: |
-          PROJECT_VERSION="$(python - <<'PY'
-          import tomllib
-          from pathlib import Path
-
-          with Path('pyproject.toml').open('rb') as pyproject:
-              print(tomllib.load(pyproject)['project']['version'])
-          PY
-          )"
-          EXPECTED_TAG="v${PROJECT_VERSION}"
-          if [ "${GITHUB_REF_NAME}" != "${EXPECTED_TAG}" ]; then
-            printf 'Release tag %s does not match pyproject version %s (expected %s)\n' \
-              "${GITHUB_REF_NAME}" "${PROJECT_VERSION}" "${EXPECTED_TAG}" >&2
-            exit 1
-          fi
-
       - name: Check lockfile is current
         run: uv lock --check
+
+      # The release tag is the only source of the version; pyproject.toml is
+      # not bumped by hand. --frozen leaves uv.lock untouched.
+      - name: Set project version from release tag
+        run: |
+          case "${GITHUB_REF_NAME}" in
+            v*) ;;
+            *)
+              printf 'Release tag %s must start with v, e.g. v1.2.3\n' "${GITHUB_REF_NAME}" >&2
+              exit 1
+              ;;
+          esac
+          uv version --frozen "${GITHUB_REF_NAME#v}"
 
       - name: Sync locked environment
         run: uv sync --frozen --all-extras --all-groups --python "${PYTHON_VERSION}"
