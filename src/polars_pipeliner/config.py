@@ -10,6 +10,7 @@ from typing import Final, cast
 from .errors import ConfigError
 
 CONFIG_TABLE: Final = "polars-pipeliner"
+CONFIG_FILE_NAME: Final = "polars-pipeliner.toml"
 DEFAULT_LOG_LEVEL: Final = "INFO"
 DEFAULT_RUN_LOG_DIR: Final = Path("target/runs")
 VALID_LOG_LEVELS: Final = frozenset({"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"})
@@ -27,6 +28,12 @@ class ProjectConfig:
             raise ConfigError.invalid_log_level(self.log_level, VALID_LOG_LEVELS)
         if not isinstance(self.run_log_dir, Path):
             raise ConfigError.invalid_run_log_dir(self.run_log_dir)
+
+
+def project_config_path(root: Path) -> Path | None:
+    """Return the project's own config file, if the root contains one."""
+    path = root / CONFIG_FILE_NAME
+    return path if path.is_file() else None
 
 
 def load_config(path: str | Path | None = None) -> ProjectConfig:

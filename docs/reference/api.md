@@ -222,15 +222,19 @@ discover(
 
 - `query_root` must be a directory.
 - `config` and `config_path` cannot both be supplied.
+- with neither, `<query_root>/polars-pipeliner.toml` is loaded if it exists;
+  otherwise the defaults are used. See [Configuration](/reference/configuration).
 - the project root is resolved to an absolute path;
 - model declarations are checked before a `Project` is returned.
 
 ### Example
 
 ```python
+project = discover("my-pipeline")  # uses my-pipeline/polars-pipeliner.toml
+
 project = discover(
     "my-pipeline",
-    config_path="polars-pipeliner.toml",
+    config_path="configs/production.toml",
 )
 ```
 
@@ -259,7 +263,8 @@ from polars_pipeliner import load_config
 config = load_config("polars-pipeliner.toml")
 ```
 
-Call `load_config()` without a path to return the default configuration.
+Call `load_config()` without a path to return the default configuration. It
+does not look for `polars-pipeliner.toml`; `discover()` does that.
 
 ## Errors
 

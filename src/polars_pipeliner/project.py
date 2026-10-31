@@ -7,7 +7,7 @@ from pathlib import Path
 
 import polars as pl
 
-from .config import ProjectConfig, load_config
+from .config import ProjectConfig, load_config, project_config_path
 from .discovery import ModelNode, _discover_models
 from .errors import ConfigError
 from .events import RunEvents, failure_fields
@@ -101,7 +101,12 @@ def discover(
     resolved_config: ProjectConfig | None = None
     nodes: Mapping[str, ModelNode] | None = None
     try:
-        resolved_config = config if config is not None else load_config(config_path)
+        if config is not None:
+            resolved_config = config
+        else:
+            resolved_config = load_config(
+                config_path if config_path is not None else project_config_path(root)
+            )
         if events is not None:
             events.set_log_level(resolved_config.log_level)
         nodes = _discover_models(root)
