@@ -1,5 +1,6 @@
 [project]
 name = "polars-pipeliner"
+# Releases overwrite this with the release tag (see .github/workflows/release.yml).
 version = "0.2.2"
 description = "Build and run dependency-ordered Polars LazyFrame queries"
 readme = "README.md"
