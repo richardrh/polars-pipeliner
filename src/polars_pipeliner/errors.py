@@ -230,18 +230,27 @@ class DiscoveryError(QueryError):
         )
 
     @classmethod
-    def invalid_output(cls, node_id: str, path: Path, detail: str) -> DiscoveryError:
+    def invalid_output(cls, node_id: str, path: Path, detail: object) -> DiscoveryError:
         return cls(f"Model {node_id} ({path}) has an invalid output: {detail}")
 
 
 class QueryValidationError(QueryError):
-    """The set of discovered models is not a valid DAG."""
+    """The set of discovered models is not a valid project."""
 
     @classmethod
     def duplicate_node_id(
         cls, node_id: str, first_path: Path, duplicate_path: Path
     ) -> QueryValidationError:
         return cls(f"Duplicate node ID {node_id!r}: {first_path} and {duplicate_path}")
+
+    @classmethod
+    def duplicate_destination(
+        cls, destination: str, node_ids: Iterable[str]
+    ) -> QueryValidationError:
+        return cls(
+            f"Multiple marts target the same output {_redact_uris(destination)}: "
+            f"{', '.join(node_ids)}"
+        )
 
     @classmethod
     def missing_dependencies(
@@ -298,16 +307,6 @@ class QueryBuildError(QueryError):
 
 class QueryExecutionError(QueryError):
     """A mart output failed during executor-owned materialization."""
-
-    @classmethod
-    def duplicate_destination(
-        cls, destination: str, node_ids: Iterable[str]
-    ) -> QueryExecutionError:
-        models = ", ".join(node_ids)
-        return cls(
-            f"Multiple marts target the same output {_redact_uris(destination)}: "
-            f"{models}"
-        )
 
     @classmethod
     def output_failed(

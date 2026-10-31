@@ -273,7 +273,7 @@ All package errors inherit from `QueryError`.
 | --- | --- |
 | `ConfigError` | Invalid configuration |
 | `DiscoveryError` | Import or model declaration failure |
-| `QueryValidationError` | Dependency or declared-schema failure |
+| `QueryValidationError` | Dependency, declared-schema, or duplicate mart-output failure |
 | `QueryBuildError` | Lazy-plan construction failure |
 | `ModelValidationError` | Resolved output-schema failure |
 | `QueryExecutionError` | Mart output failure |
