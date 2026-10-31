@@ -14,7 +14,7 @@ import polars as pl
 
 from .errors import DiscoveryError, QueryError, QueryValidationError
 from .model import MartModel, Model, SourceModel, _declared_inputs
-from .output import DeltaUpsertOutput, OutputSpec
+from .output import DeltaUpsertOutput, OutputSpec, plan_output
 
 MODEL_DIRECTORIES = ("sources", "staging", "intermediate", "marts")
 
@@ -31,6 +31,7 @@ def _discover_models(root: Path) -> dict[str, ModelNode]:
     if not root.is_dir():
         raise DiscoveryError.invalid_root(root)
     nodes: dict[str, ModelNode] = {}
+    output_owners: dict[tuple[str, str], str] = {}
     paths = sorted(
         (
             path
@@ -49,6 +50,8 @@ def _discover_models(root: Path) -> dict[str, ModelNode]:
                     node_id, nodes[node_id].path, path
                 )
             model_type = _load_model_class(path, root, node_id)
+            if issubclass(model_type, MartModel):
+                _claim_output(model_type.output, root, node_id, path, output_owners)
         except QueryError as error:
             error.context.update(
                 {"node_id": node_id, "path": path, "models_found": len(paths)}
@@ -56,6 +59,23 @@ def _discover_models(root: Path) -> dict[str, ModelNode]:
             raise
         nodes[node_id] = ModelNode(node_id, path, model_type)
     return nodes
+
+
+def _claim_output(
+    spec: OutputSpec,
+    root: Path,
+    node_id: str,
+    path: Path,
+    owners: dict[tuple[str, str], str],
+) -> None:
+    """Reject a mart whose output resolves to one already claimed by another."""
+    try:
+        identity = plan_output(spec, root).identity
+    except Exception as error:
+        raise DiscoveryError.invalid_output(node_id, path, error) from error
+    if (owner := owners.get(identity)) is not None:
+        raise QueryValidationError.duplicate_destination(identity[1], (owner, node_id))
+    owners[identity] = node_id
 
 
 def _load_model_class(

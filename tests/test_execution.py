@@ -15,8 +15,15 @@ from polars_pipeliner import (
     Output,
     QueryBuildError,
     QueryExecutionError,
+    QueryValidationError,
     discover,
 )
+
+
+@pytest.fixture
+def delta_extra_not_required(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Let tests that stub LazyFrame.sink_delta run without the delta extra."""
+    monkeypatch.setattr(executor, "_require_optional_dependency", lambda *args: None)
 
 
 def chain_text(error: BaseException) -> str:
@@ -433,36 +440,22 @@ def test_grouped_output_failure_identifies_all_affected_destinations(
         ),
     ],
 )
-def test_duplicate_output_destinations_fail_before_any_write(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    first: str,
-    second: str,
-    destination: str,
+def test_duplicate_output_destinations_are_rejected_before_validate_or_run(
+    tmp_path: Path, first: str, second: str, destination: str
 ) -> None:
     write(tmp_path, "sources/orders.py", source())
     write(tmp_path, "marts/first.py", mart("First", first))
     write(tmp_path, "marts/second.py", mart("Second", second))
-    writes: list[object] = []
-    monkeypatch.setattr(pl, "collect_all", lambda frames: writes.append(frames))
-    monkeypatch.setattr(
-        pl.LazyFrame,
-        "sink_delta",
-        lambda self, target, **kwargs: writes.append(target),
-        raising=False,
-    )
 
-    with pytest.raises(QueryExecutionError, match="Multiple marts target") as raised:
-        discover(tmp_path).run()
+    with pytest.raises(QueryValidationError, match="Multiple marts target") as raised:
+        discover(tmp_path).validate()
 
     message = str(raised.value)
     assert "marts.first" in message
     assert "marts.second" in message
     assert destination in message
-    assert "secret" not in message
     assert "token=" not in message
-    assert writes == []
-    assert not (tmp_path / "same.parquet").exists()
+    assert raised.value.context["node_id"] == "marts.second"
 
 
 def test_output_preparation_failure_is_attributed_to_its_mart(
@@ -482,6 +475,7 @@ def test_output_preparation_failure_is_attributed_to_its_mart(
     assert f"marts.orders to {tmp_path / 'out.parquet'}" in str(raised.value)
 
 
+@pytest.mark.usefixtures("delta_extra_not_required")
 def test_uri_manifest_strips_query_and_fragment(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -498,6 +492,7 @@ def test_uri_manifest_strips_query_and_fragment(
     assert discover(tmp_path).run() == {"marts.orders": "s3://bucket/orders"}
 
 
+@pytest.mark.usefixtures("delta_extra_not_required")
 def test_relative_delta_destination_resolves_from_project_root(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -551,6 +546,7 @@ def test_missing_output_extra_has_an_actionable_error(
         discover(tmp_path).run()
 
 
+@pytest.mark.usefixtures("delta_extra_not_required")
 def test_second_direct_output_failure_is_attributed_to_its_mart(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

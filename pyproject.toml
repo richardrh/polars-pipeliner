@@ -47,6 +47,14 @@ testpaths = ["tests"]
 strict = true
 files = ["src"]
 
+# pyiceberg is an optional extra; type-check without it installed.
+[[tool.mypy.overrides]]
+module = ["pyiceberg", "pyiceberg.*"]
+ignore_missing_imports = true
+
+[tool.ty.analysis]
+allowed-unresolved-imports = ["pyiceberg.**"]
+
 [tool.ruff]
 line-length = 88
 
